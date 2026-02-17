@@ -23,6 +23,7 @@ try:
         CreateMessageRequest,
         CreateMessageRequestBody,
         GetFileRequest,
+        GetMessageResourceRequest,
         P2ImMessageReceiveV1,
     )
 
@@ -34,6 +35,7 @@ except ImportError:  # pragma: no cover - environment dependent
     CreateMessageRequest = None
     CreateMessageRequestBody = None
     GetFileRequest = None
+    GetMessageResourceRequest = None
     P2ImMessageReceiveV1 = None
     FEISHU_AVAILABLE = False
 
@@ -274,11 +276,27 @@ class FeishuChannel(BaseChannel):
         self._send_text_sync(msg)
 
     def _download_file_sync(self, file_key: str, file_name: str, message_id: str) -> Path:
-        if not self._client or GetFileRequest is None:
-            raise RuntimeError("Feishu file API is unavailable in current SDK/runtime")
+        if not self._client:
+            raise RuntimeError("Feishu client is unavailable")
 
-        request = GetFileRequest.builder().file_key(file_key).build()
-        response = self._client.im.v1.file.get(request)
+        # For message attachments uploaded by users, the message resource API is
+        # the correct endpoint. `im.v1.file.get` is for app-owned resources and
+        # may return code=234008 (app is not the resource sender).
+        if GetMessageResourceRequest is not None:
+            request = (
+                GetMessageResourceRequest.builder()
+                .type("file")
+                .message_id(message_id)
+                .file_key(file_key)
+                .build()
+            )
+            response = self._client.im.v1.message_resource.get(request)
+        elif GetFileRequest is not None:
+            request = GetFileRequest.builder().file_key(file_key).build()
+            response = self._client.im.v1.file.get(request)
+        else:
+            raise RuntimeError("Feishu file download APIs are unavailable in current SDK/runtime")
+
         success_fn = getattr(response, "success", None)
         if callable(success_fn) and not success_fn():
             code = getattr(response, "code", "")
