@@ -12,11 +12,12 @@ import sys
 import uuid
 from pathlib import Path
 
-from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
+from .channels.factory import build_channel_manager, parse_enabled_channels, validate_channel_setup
 from .runtime.adk_utils import extract_text
+from .runtime.runner_factory import create_runner
+from .runtime.session_service import load_session_backend_config
 from .skills import get_registry
 
 
@@ -42,8 +43,15 @@ def _cmd_doctor() -> int:
 
     registry = get_registry()
     skills_count = len(registry.list_skills())
+    backend = load_session_backend_config()
+    configured_channels = parse_enabled_channels(None)
+    channel_issues = validate_channel_setup(configured_channels)
+    issues.extend(channel_issues)
+
     print(f"Workspace: {registry.workspace}")
     print(f"Detected skills: {skills_count}")
+    print(f"Session backend: {backend.backend}" + (f" ({backend.db_url})" if backend.db_url else ""))
+    print(f"Configured channels: {', '.join(configured_channels) if configured_channels else '(none)'}")
 
     if issues:
         print("\nIssues:")
@@ -66,17 +74,34 @@ def _cmd_run(passthrough_args: list[str]) -> int:
 
 
 def _cmd_gateway_local(sender_id: str, chat_id: str) -> int:
+    return _cmd_gateway(channels="local", sender_id=sender_id, chat_id=chat_id, interactive_local=True)
+
+
+def _cmd_gateway(
+    *,
+    channels: str | None,
+    sender_id: str,
+    chat_id: str,
+    interactive_local: bool,
+) -> int:
     from .agent import root_agent
     from .bus.queue import MessageBus
-    from .channels.local import LocalChannel
-    from .channels.manager import ChannelManager
     from .gateway import Gateway
 
     async def _run() -> int:
         bus = MessageBus()
-        local_channel = LocalChannel(bus=bus)
-        manager = ChannelManager(bus=bus)
-        manager.register(local_channel)
+        names = parse_enabled_channels(channels)
+        issues = validate_channel_setup(names)
+        if issues:
+            for item in issues:
+                print(f"[doctor] {item}")
+            return 1
+
+        manager, local_channel = build_channel_manager(
+            bus=bus,
+            channel_names=names,
+            local_writer=print,
+        )
         gateway = Gateway(
             agent=root_agent,
             app_name=root_agent.name,
@@ -84,19 +109,24 @@ def _cmd_gateway_local(sender_id: str, chat_id: str) -> int:
             channel_manager=manager,
         )
         await gateway.start()
-        print("gateway-local started. Type /quit or /exit to stop.")
+        print(f"gateway started with channels: {', '.join(names)}")
+        if interactive_local and local_channel:
+            print("local interactive mode: type /quit or /exit to stop.")
         try:
             while True:
-                try:
-                    line = await asyncio.to_thread(input, "> ")
-                except EOFError:
-                    break
-                text = line.strip()
-                if not text:
+                if interactive_local and local_channel:
+                    try:
+                        line = await asyncio.to_thread(input, "> ")
+                    except EOFError:
+                        break
+                    text = line.strip()
+                    if not text:
+                        continue
+                    if text in {"/quit", "/exit"}:
+                        break
+                    await local_channel.ingest_text(text, chat_id=chat_id, sender_id=sender_id)
                     continue
-                if text in {"/quit", "/exit"}:
-                    break
-                await local_channel.ingest_text(text, chat_id=chat_id, sender_id=sender_id)
+                await asyncio.sleep(3600)
         finally:
             await gateway.stop()
         return 0
@@ -106,7 +136,7 @@ def _cmd_gateway_local(sender_id: str, chat_id: str) -> int:
     except KeyboardInterrupt:
         return 0
     except Exception as exc:
-        print(f"Error running gateway-local: {exc}")
+        print(f"Error running gateway: {exc}")
         return 1
 
 
@@ -125,10 +155,8 @@ def _cmd_message(message: str, user_id: str, session_id: str) -> int:
     )
 
     async def _run_once() -> str:
-        session_service = InMemorySessionService()
         app_name = root_agent.name
-        await session_service.create_session(app_name=app_name, user_id=user_id, session_id=session_id)
-        runner = Runner(agent=root_agent, app_name=app_name, session_service=session_service)
+        runner, _ = create_runner(agent=root_agent, app_name=app_name)
         request = types.UserContent(parts=[types.Part.from_text(text=message)])
 
         final = ""
@@ -177,6 +205,22 @@ def main(argv: list[str] | None = None) -> None:
     )
     gateway_parser.add_argument("--sender-id", default="local-user", help="Sender id used for inbound messages.")
     gateway_parser.add_argument("--chat-id", default="terminal", help="Chat id used for inbound messages.")
+    gateway_parser = subparsers.add_parser(
+        "gateway",
+        help="Run gateway using env/CLI channels (e.g. feishu).",
+    )
+    gateway_parser.add_argument(
+        "--channels",
+        default=None,
+        help="Comma-separated channels. Defaults to SENTIENTAGENT_V2_CHANNELS or 'local'.",
+    )
+    gateway_parser.add_argument("--sender-id", default="local-user", help="Sender id for local interactive mode.")
+    gateway_parser.add_argument("--chat-id", default="terminal", help="Chat id for local interactive mode.")
+    gateway_parser.add_argument(
+        "--interactive-local",
+        action="store_true",
+        help="Enable terminal input loop when local channel is enabled.",
+    )
 
     args = parser.parse_args(argv)
     if args.message:
@@ -190,6 +234,13 @@ def main(argv: list[str] | None = None) -> None:
         code = _cmd_run(args.adk_args)
     elif args.command == "gateway-local":
         code = _cmd_gateway_local(sender_id=args.sender_id, chat_id=args.chat_id)
+    elif args.command == "gateway":
+        code = _cmd_gateway(
+            channels=args.channels,
+            sender_id=args.sender_id,
+            chat_id=args.chat_id,
+            interactive_local=args.interactive_local,
+        )
     else:
         parser.print_help()
         code = 2

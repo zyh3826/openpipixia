@@ -1,0 +1,187 @@
+"""Feishu channel adapter (inbound WebSocket + outbound message API)."""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import threading
+from typing import Any
+
+from .base import BaseChannel
+
+try:
+    import lark_oapi as lark
+    from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody, P2ImMessageReceiveV1
+
+    FEISHU_AVAILABLE = True
+except ImportError:  # pragma: no cover - environment dependent
+    lark = None
+    FEISHU_AVAILABLE = False
+
+
+def _extract_post_text(content_json: dict[str, Any]) -> str:
+    """Extract text from Feishu rich-text `post` payload."""
+    for lang_key in ("zh_cn", "en_us", "ja_jp"):
+        lang = content_json.get(lang_key)
+        if isinstance(lang, dict) and isinstance(lang.get("content"), list):
+            parts: list[str] = []
+            title = lang.get("title", "")
+            if title:
+                parts.append(str(title))
+            for block in lang["content"]:
+                if isinstance(block, list):
+                    for el in block:
+                        if isinstance(el, dict) and el.get("tag") in {"text", "a"}:
+                            text = str(el.get("text", "")).strip()
+                            if text:
+                                parts.append(text)
+            if parts:
+                return " ".join(parts).strip()
+    return ""
+
+
+class FeishuChannel(BaseChannel):
+    """Minimal Feishu adapter compatible with the bus/gateway flow."""
+
+    name = "feishu"
+
+    def __init__(
+        self,
+        bus,
+        *,
+        app_id: str,
+        app_secret: str,
+        encrypt_key: str = "",
+        verification_token: str = "",
+    ) -> None:
+        super().__init__(bus)
+        self.app_id = app_id
+        self.app_secret = app_secret
+        self.encrypt_key = encrypt_key
+        self.verification_token = verification_token
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._client: Any = None
+        self._ws_client: Any = None
+        self._ws_thread: threading.Thread | None = None
+
+    async def start(self) -> None:
+        if not FEISHU_AVAILABLE:
+            raise RuntimeError("Feishu channel requires `lark-oapi`.")
+        if not self.app_id or not self.app_secret:
+            raise RuntimeError("Missing FEISHU_APP_ID or FEISHU_APP_SECRET.")
+
+        self._running = True
+        self._loop = asyncio.get_running_loop()
+        self._client = (
+            lark.Client.builder()  # type: ignore[union-attr]
+            .app_id(self.app_id)
+            .app_secret(self.app_secret)
+            .log_level(lark.LogLevel.INFO)  # type: ignore[union-attr]
+            .build()
+        )
+
+        handler = (
+            lark.EventDispatcherHandler.builder(  # type: ignore[union-attr]
+                self.encrypt_key or "",
+                self.verification_token or "",
+            )
+            .register_p2_im_message_receive_v1(self._on_message_sync)
+            .build()
+        )
+        self._ws_client = lark.ws.Client(  # type: ignore[union-attr]
+            self.app_id,
+            self.app_secret,
+            event_handler=handler,
+            log_level=lark.LogLevel.INFO,  # type: ignore[union-attr]
+        )
+
+        def _run_ws_forever() -> None:
+            while self._running:
+                try:
+                    self._ws_client.start()
+                except Exception:
+                    if self._running:
+                        import time
+
+                        time.sleep(3)
+
+        self._ws_thread = threading.Thread(target=_run_ws_forever, daemon=True)
+        self._ws_thread.start()
+
+    async def stop(self) -> None:
+        self._running = False
+        if self._ws_client:
+            try:
+                self._ws_client.stop()
+            except Exception:
+                pass
+
+    async def send(self, msg) -> None:
+        if not self._client:
+            return
+        receive_id_type = "chat_id" if msg.chat_id.startswith("oc_") else "open_id"
+        payload = json.dumps({"text": msg.content}, ensure_ascii=False)
+        request = (
+            CreateMessageRequest.builder()
+            .receive_id_type(receive_id_type)
+            .request_body(
+                CreateMessageRequestBody.builder()
+                .receive_id(msg.chat_id)
+                .msg_type("text")
+                .content(payload)
+                .build()
+            )
+            .build()
+        )
+        self._client.im.v1.message.create(request)
+
+    def _on_message_sync(self, data: "P2ImMessageReceiveV1") -> None:
+        if self._loop and self._loop.is_running():
+            asyncio.run_coroutine_threadsafe(self._on_message(data), self._loop)
+
+    async def _on_message(self, data: "P2ImMessageReceiveV1") -> None:
+        try:
+            event = data.event
+            message = event.message
+            sender = event.sender
+            sender_type = getattr(sender, "sender_type", "")
+            if sender_type == "bot":
+                return
+
+            sender_id = getattr(getattr(sender, "sender_id", None), "open_id", "") or "unknown"
+            chat_id = getattr(message, "chat_id", "")
+            chat_type = getattr(message, "chat_type", "")
+            msg_type = getattr(message, "message_type", "")
+            raw_content = getattr(message, "content", "") or ""
+
+            if msg_type == "text":
+                try:
+                    content = json.loads(raw_content).get("text", "")
+                except json.JSONDecodeError:
+                    content = raw_content
+            elif msg_type == "post":
+                try:
+                    content = _extract_post_text(json.loads(raw_content))
+                except Exception:
+                    content = ""
+            else:
+                content = ""
+
+            if not content:
+                return
+
+            # Keep the same routing rule as nanobot: groups reply to group chat_id,
+            # p2p replies to sender open_id.
+            target_chat_id = chat_id if chat_type == "group" else sender_id
+            await self.publish_inbound(
+                sender_id=sender_id,
+                chat_id=target_chat_id,
+                content=content,
+                metadata={
+                    "msg_type": msg_type,
+                    "chat_type": chat_type,
+                    "message_id": getattr(message, "message_id", ""),
+                },
+            )
+        except Exception:
+            return

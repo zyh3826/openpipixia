@@ -5,14 +5,13 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from google.adk.runners import Runner
-from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
 from .bus.events import InboundMessage, OutboundMessage
 from .bus.queue import MessageBus
 from .channels.manager import ChannelManager
 from .runtime.adk_utils import extract_text
+from .runtime.runner_factory import create_runner
 from .runtime.tool_context import route_context
 from .tools import configure_outbound_publisher
 
@@ -31,12 +30,10 @@ class Gateway:
     ) -> None:
         self.bus = bus
         self.channel_manager = channel_manager
-        self.session_service = session_service or InMemorySessionService()
-        self.runner = Runner(
+        self.runner, self.session_service = create_runner(
             agent=agent,
             app_name=app_name,
-            session_service=self.session_service,
-            auto_create_session=True,
+            session_service=session_service,
         )
         self._inbound_task: asyncio.Task[None] | None = None
 

@@ -36,15 +36,12 @@ class GatewayTests(unittest.TestCase):
         )
 
         class _FakeRunner:
-            def __init__(self, **kwargs):
-                pass
-
             async def run_async(self, **kwargs):
                 yield fake_event_1
                 yield fake_event_2
 
         fake_agent = pytypes.SimpleNamespace(name="sentientagent_v2")
-        with patch("sentientagent_v2.gateway.Runner", _FakeRunner):
+        with patch("sentientagent_v2.gateway.create_runner", return_value=(_FakeRunner(), object())):
             gateway = Gateway(agent=fake_agent, app_name="sentientagent_v2", bus=MessageBus())
             inbound = InboundMessage(channel="local", sender_id="u1", chat_id="c1", content="hello")
             outbound = asyncio.run(gateway.process_message(inbound))
