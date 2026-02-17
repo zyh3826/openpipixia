@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from sentientagent_v2.runtime.tool_context import route_context
 from sentientagent_v2.tools import (
     cron,
     edit_file,
@@ -59,6 +60,17 @@ class ToolsTests(unittest.TestCase):
             self.assertIn("Message recorded", response)
             outbox = Path(tmp) / "messages" / "outbox.log"
             self.assertTrue(outbox.exists())
+
+    def test_message_tool_uses_route_context_when_target_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["SENTIENTAGENT_V2_WORKSPACE"] = tmp
+            with route_context("telegram", "u2"):
+                response = message("hi-context", channel=None, chat_id=None)
+            self.assertIn("Message recorded", response)
+            outbox = Path(tmp) / "messages" / "outbox.log"
+            record = json.loads(outbox.read_text(encoding="utf-8").splitlines()[-1])
+            self.assertEqual(record["channel"], "telegram")
+            self.assertEqual(record["chat_id"], "u2")
 
     def test_cron_tool_add_list_remove(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

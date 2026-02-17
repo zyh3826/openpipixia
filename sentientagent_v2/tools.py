@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import asyncio
 import json
 import os
 import re
@@ -10,10 +11,16 @@ import subprocess
 import sys
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Awaitable, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
+
+from .bus.events import OutboundMessage
+from .runtime.tool_context import get_route
+
+
+_OUTBOUND_PUBLISHER: Callable[[OutboundMessage], Awaitable[None]] | None = None
 
 
 def _workspace() -> Path:
@@ -264,14 +271,52 @@ def web_fetch(url: str, max_chars: int = 50000) -> str:
         return _ret("tool.web_fetch.output", _json({"error": str(exc), "url": url}))
 
 
-def message(content: str, channel: str = "local", chat_id: str = "default") -> str:
-    """Record an outbound message to a local outbox log."""
-    _debug("tool.message.input", {"channel": channel, "chat_id": chat_id, "chars": len(content)})
+def configure_outbound_publisher(
+    publisher: Callable[[OutboundMessage], Awaitable[None]] | None,
+) -> None:
+    """Configure optional outbound publishing callback used by gateway."""
+    global _OUTBOUND_PUBLISHER
+    _OUTBOUND_PUBLISHER = publisher
+
+
+def _resolve_route(channel: str | None, chat_id: str | None) -> tuple[str, str]:
+    route_channel, route_chat_id = get_route()
+    final_channel = channel or route_channel or "local"
+    final_chat_id = chat_id or route_chat_id or "default"
+    return final_channel, final_chat_id
+
+
+def _publish_outbound_if_configured(msg: OutboundMessage) -> bool:
+    if _OUTBOUND_PUBLISHER is None:
+        return False
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(_OUTBOUND_PUBLISHER(msg))
+        return True
+    except RuntimeError:
+        try:
+            asyncio.run(_OUTBOUND_PUBLISHER(msg))
+            return True
+        except Exception:
+            return False
+
+
+def message(content: str, channel: str | None = None, chat_id: str | None = None) -> str:
+    """Send an outbound message via bus publisher or local outbox fallback."""
+    target_channel, target_chat_id = _resolve_route(channel, chat_id)
+    _debug("tool.message.input", {"channel": target_channel, "chat_id": target_chat_id, "chars": len(content)})
+
+    outbound = OutboundMessage(channel=target_channel, chat_id=target_chat_id, content=content)
+    if _publish_outbound_if_configured(outbound):
+        result = f"Message queued to {target_channel}:{target_chat_id}"
+        _debug("tool.message.output", result)
+        return result
+
     outbox = _workspace() / "messages" / "outbox.log"
     outbox.parent.mkdir(parents=True, exist_ok=True)
     ts = dt.datetime.now().isoformat(timespec="seconds")
     line = json.dumps(
-        {"timestamp": ts, "channel": channel, "chat_id": chat_id, "content": content},
+        {"timestamp": ts, "channel": target_channel, "chat_id": target_chat_id, "content": content},
         ensure_ascii=False,
     )
     with outbox.open("a", encoding="utf-8") as f:

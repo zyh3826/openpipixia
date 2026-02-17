@@ -64,6 +64,51 @@ def _cmd_run(passthrough_args: list[str]) -> int:
     return subprocess.call(cmd)
 
 
+def _cmd_gateway_local(sender_id: str, chat_id: str) -> int:
+    from .agent import root_agent
+    from .bus.queue import MessageBus
+    from .channels.local import LocalChannel
+    from .channels.manager import ChannelManager
+    from .gateway import Gateway
+
+    async def _run() -> int:
+        bus = MessageBus()
+        local_channel = LocalChannel(bus=bus)
+        manager = ChannelManager(bus=bus)
+        manager.register(local_channel)
+        gateway = Gateway(
+            agent=root_agent,
+            app_name=root_agent.name,
+            bus=bus,
+            channel_manager=manager,
+        )
+        await gateway.start()
+        print("gateway-local started. Type /quit or /exit to stop.")
+        try:
+            while True:
+                try:
+                    line = await asyncio.to_thread(input, "> ")
+                except EOFError:
+                    break
+                text = line.strip()
+                if not text:
+                    continue
+                if text in {"/quit", "/exit"}:
+                    break
+                await local_channel.ingest_text(text, chat_id=chat_id, sender_id=sender_id)
+        finally:
+            await gateway.stop()
+        return 0
+
+    try:
+        return asyncio.run(_run())
+    except KeyboardInterrupt:
+        return 0
+    except Exception as exc:
+        print(f"Error running gateway-local: {exc}")
+        return 1
+
+
 def _extract_text(content: types.Content | None) -> str:
     if content is None or not content.parts:
         return ""
@@ -136,6 +181,12 @@ def main(argv: list[str] | None = None) -> None:
 
     run_parser = subparsers.add_parser("run", help="Run `adk run` for this agent.")
     run_parser.add_argument("adk_args", nargs=argparse.REMAINDER, help="Extra args passed to adk run.")
+    gateway_parser = subparsers.add_parser(
+        "gateway-local",
+        help="Run minimal local channel gateway (bus + runner + stdio).",
+    )
+    gateway_parser.add_argument("--sender-id", default="local-user", help="Sender id used for inbound messages.")
+    gateway_parser.add_argument("--chat-id", default="terminal", help="Chat id used for inbound messages.")
 
     args = parser.parse_args(argv)
     if args.message:
@@ -147,6 +198,8 @@ def main(argv: list[str] | None = None) -> None:
         code = _cmd_doctor()
     elif args.command == "run":
         code = _cmd_run(args.adk_args)
+    elif args.command == "gateway-local":
+        code = _cmd_gateway_local(sender_id=args.sender_id, chat_id=args.chat_id)
     else:
         parser.print_help()
         code = 2
