@@ -12,23 +12,13 @@ from google.genai import types
 from .bus.events import InboundMessage, OutboundMessage
 from .bus.queue import MessageBus
 from .channels.manager import ChannelManager
+from .runtime.adk_utils import extract_text
 from .runtime.tool_context import route_context
 from .tools import configure_outbound_publisher
 
 
-def _extract_text(content: types.Content | None) -> str:
-    if content is None or not content.parts:
-        return ""
-    chunks: list[str] = []
-    for part in content.parts:
-        text = getattr(part, "text", None)
-        if text:
-            chunks.append(text)
-    return "\n".join(chunks).strip()
-
-
 class Gateway:
-    """Consumes inbound bus messages and routes them through ADK runner."""
+    """Consumes inbound messages and executes them via ADK Runner."""
 
     def __init__(
         self,
@@ -48,14 +38,13 @@ class Gateway:
             session_service=self.session_service,
             auto_create_session=True,
         )
-        self._running = False
         self._inbound_task: asyncio.Task[None] | None = None
-        self._session_locks: dict[str, asyncio.Lock] = {}
 
     async def start(self) -> None:
-        if self._running:
+        if self._inbound_task and not self._inbound_task.done():
             return
-        self._running = True
+        # Tools call `message(...)` from inside runner execution; this bridges
+        # those tool-level sends back into the outbound queue.
         configure_outbound_publisher(self.bus.publish_outbound)
         if self.channel_manager:
             await self.channel_manager.start_all()
@@ -63,7 +52,6 @@ class Gateway:
         self._inbound_task = asyncio.create_task(self._consume_inbound())
 
     async def stop(self) -> None:
-        self._running = False
         configure_outbound_publisher(None)
         if self._inbound_task:
             self._inbound_task.cancel()
@@ -76,53 +64,31 @@ class Gateway:
             await self.channel_manager.stop_dispatcher()
             await self.channel_manager.stop_all()
 
-    async def send_user_message(
-        self,
-        *,
-        channel: str,
-        sender_id: str,
-        chat_id: str,
-        content: str,
-        metadata: dict[str, Any] | None = None,
-    ) -> None:
-        await self.bus.publish_inbound(
-            InboundMessage(
-                channel=channel,
-                sender_id=sender_id,
-                chat_id=chat_id,
-                content=content,
-                metadata=metadata or {},
-            )
+    async def process_message(self, msg: InboundMessage) -> OutboundMessage:
+        request = types.UserContent(parts=[types.Part.from_text(text=msg.content)])
+        final = ""
+        # Route context lets tools like `message(...)` infer the current target.
+        with route_context(msg.channel, msg.chat_id):
+            async for event in self.runner.run_async(
+                user_id=msg.sender_id,
+                session_id=msg.session_key,
+                new_message=request,
+            ):
+                text = extract_text(getattr(event, "content", None))
+                if text:
+                    final = text
+        if not final:
+            final = "(no response)"
+        return OutboundMessage(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content=final,
+            metadata=msg.metadata,
         )
 
-    async def process_message(self, msg: InboundMessage) -> OutboundMessage:
-        lock = self._session_locks.setdefault(msg.session_key, asyncio.Lock())
-        async with lock:
-            request = types.UserContent(parts=[types.Part.from_text(text=msg.content)])
-            final = ""
-            with route_context(msg.channel, msg.chat_id):
-                async for event in self.runner.run_async(
-                    user_id=msg.sender_id,
-                    session_id=msg.session_key,
-                    new_message=request,
-                ):
-                    text = _extract_text(getattr(event, "content", None))
-                    if text:
-                        final = text
-            if not final:
-                final = "(no response)"
-            return OutboundMessage(
-                channel=msg.channel,
-                chat_id=msg.chat_id,
-                content=final,
-                metadata=msg.metadata,
-            )
-
     async def _consume_inbound(self) -> None:
-        while self._running:
-            try:
-                msg = await asyncio.wait_for(self.bus.consume_inbound(), timeout=0.5)
-            except asyncio.TimeoutError:
-                continue
+        while True:
+            # Single worker keeps message order deterministic for this skeleton.
+            msg = await self.bus.consume_inbound()
             response = await self.process_message(msg)
             await self.bus.publish_outbound(response)

@@ -16,6 +16,7 @@ from google.adk.runners import Runner
 from google.adk.sessions import InMemorySessionService
 from google.genai import types
 
+from .runtime.adk_utils import extract_text
 from .skills import get_registry
 
 
@@ -109,17 +110,6 @@ def _cmd_gateway_local(sender_id: str, chat_id: str) -> int:
         return 1
 
 
-def _extract_text(content: types.Content | None) -> str:
-    if content is None or not content.parts:
-        return ""
-    chunks: list[str] = []
-    for part in content.parts:
-        text = getattr(part, "text", None)
-        if text:
-            chunks.append(text)
-    return "\n".join(chunks).strip()
-
-
 def _cmd_message(message: str, user_id: str, session_id: str) -> int:
     from .agent import root_agent
 
@@ -144,7 +134,7 @@ def _cmd_message(message: str, user_id: str, session_id: str) -> int:
         final = ""
         async for event in runner.run_async(user_id=user_id, session_id=session_id, new_message=request):
             _debug_event(event)
-            text = _extract_text(event.content)
+            text = extract_text(event.content)
             if text:
                 final = text
         return final

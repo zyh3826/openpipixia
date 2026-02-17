@@ -291,14 +291,13 @@ def _publish_outbound_if_configured(msg: OutboundMessage) -> bool:
         return False
     try:
         loop = asyncio.get_running_loop()
-        loop.create_task(_OUTBOUND_PUBLISHER(msg))
-        return True
     except RuntimeError:
-        try:
-            asyncio.run(_OUTBOUND_PUBLISHER(msg))
-            return True
-        except Exception:
-            return False
+        # Tool calls often happen in plain sync contexts (tests or direct calls).
+        # In that case we intentionally fall back to local outbox logging.
+        return False
+    # Fire-and-forget is sufficient here: channel delivery is handled by gateway.
+    loop.create_task(_OUTBOUND_PUBLISHER(msg))
+    return True
 
 
 def message(content: str, channel: str | None = None, chat_id: str | None = None) -> str:

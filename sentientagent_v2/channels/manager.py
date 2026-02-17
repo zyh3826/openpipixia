@@ -15,7 +15,6 @@ class ChannelManager:
         self.bus = bus
         self.channels: dict[str, BaseChannel] = {}
         self._dispatch_task: asyncio.Task[None] | None = None
-        self._dispatch_running = False
 
     def register(self, channel: BaseChannel) -> None:
         self.channels[channel.name] = channel
@@ -31,11 +30,9 @@ class ChannelManager:
     async def start_dispatcher(self) -> None:
         if self._dispatch_task and not self._dispatch_task.done():
             return
-        self._dispatch_running = True
         self._dispatch_task = asyncio.create_task(self._dispatch_outbound())
 
     async def stop_dispatcher(self) -> None:
-        self._dispatch_running = False
         if self._dispatch_task:
             self._dispatch_task.cancel()
             try:
@@ -45,11 +42,9 @@ class ChannelManager:
             self._dispatch_task = None
 
     async def _dispatch_outbound(self) -> None:
-        while self._dispatch_running:
-            try:
-                msg = await asyncio.wait_for(self.bus.consume_outbound(), timeout=0.5)
-            except asyncio.TimeoutError:
-                continue
+        while True:
+            # Cancellation cleanly exits this blocking wait.
+            msg = await self.bus.consume_outbound()
             channel = self.channels.get(msg.channel)
             if channel:
                 await channel.send(msg)
