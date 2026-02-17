@@ -17,6 +17,7 @@ from sentientagent_v2.tools import (
     message,
     read_file,
     web_fetch,
+    web_search,
     write_file,
 )
 
@@ -88,6 +89,18 @@ class ToolsTests(unittest.TestCase):
     def test_web_fetch_rejects_invalid_url(self) -> None:
         payload = json.loads(web_fetch("file:///tmp/test.txt"))
         self.assertIn("error", payload)
+
+    def test_web_search_respects_disabled_flag(self) -> None:
+        os.environ["SENTIENTAGENT_V2_WEB_ENABLED"] = "0"
+        out = web_search("adk")
+        self.assertIn("disabled", out.lower())
+
+    def test_web_search_respects_provider_config(self) -> None:
+        os.environ["SENTIENTAGENT_V2_WEB_ENABLED"] = "1"
+        os.environ["SENTIENTAGENT_V2_WEB_SEARCH_ENABLED"] = "1"
+        os.environ["SENTIENTAGENT_V2_WEB_SEARCH_PROVIDER"] = "dummy"
+        out = web_search("adk")
+        self.assertIn("not supported", out.lower())
 
 
 if __name__ == "__main__":

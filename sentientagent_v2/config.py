@@ -25,28 +25,70 @@ def get_default_workspace_path() -> Path:
     return get_data_dir() / "workspace"
 
 
+def _is_enabled(value: Any, *, default: bool = False) -> bool:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
+    return default
+
+
 def default_config() -> dict[str, Any]:
     """Build default config content."""
     return {
         "agent": {
-            "model": "gemini-3-flash-preview",
             "workspace": str(get_default_workspace_path()),
             "builtinSkillsDir": "",
+        },
+        "providers": {
+            "active": "google",
+            "google": {
+                "enabled": True,
+                "apiKey": "",
+                "model": "gemini-3-flash-preview",
+            },
+            "openai": {
+                "enabled": False,
+                "apiKey": "",
+                "model": "",
+            },
+            "openrouter": {
+                "enabled": False,
+                "apiKey": "",
+                "model": "",
+            },
         },
         "session": {
             "backend": "memory",
             "dbUrl": "",
         },
         "channels": {
-            "enabled": ["local"],
+            "local": {
+                "enabled": True,
+            },
             "feishu": {
+                "enabled": False,
                 "appId": "",
                 "appSecret": "",
                 "encryptKey": "",
                 "verificationToken": "",
             },
         },
+        "web": {
+            "enabled": True,
+            "search": {
+                "enabled": True,
+                "provider": "brave",
+                "apiKey": "",
+                "maxResults": 5,
+            },
+        },
         "keys": {
+            # Legacy compatibility fields. Prefer providers/web sections above.
             "googleApiKey": "",
             "braveApiKey": "",
         },
@@ -114,29 +156,108 @@ def _coerce_channels(value: Any) -> str:
     return "local"
 
 
+def _resolve_enabled_channels(channels: dict[str, Any]) -> str:
+    """Resolve enabled channel names from new-style flags or legacy list."""
+    legacy = channels.get("enabled")
+    if legacy is not None:
+        return _coerce_channels(legacy)
+
+    names: list[str] = []
+    for name in ("local", "feishu"):
+        raw = channels.get(name)
+        if isinstance(raw, dict):
+            enabled = _is_enabled(raw.get("enabled"), default=(name == "local"))
+        else:
+            enabled = _is_enabled(raw, default=False)
+        if enabled:
+            names.append(name)
+
+    if not names:
+        return "local"
+    return ",".join(names)
+
+
+def _resolve_provider(cfg: dict[str, Any]) -> tuple[str, bool, str, str]:
+    providers = cfg.get("providers")
+    if not isinstance(providers, dict):
+        providers = {}
+
+    active = str(providers.get("active", "google")).strip().lower() or "google"
+    active_cfg = providers.get(active, {})
+    if not isinstance(active_cfg, dict):
+        active_cfg = {}
+
+    enabled = _is_enabled(active_cfg.get("enabled"), default=(active == "google"))
+    agent = cfg.get("agent", {})
+    keys = cfg.get("keys", {})
+    model = str(active_cfg.get("model", "")).strip() or str(agent.get("model", "")).strip() or "gemini-3-flash-preview"
+
+    # Runtime currently uses Google ADK; keep legacy key fallback.
+    if active == "google":
+        api_key = str(active_cfg.get("apiKey", "")).strip() or str(keys.get("googleApiKey", "")).strip()
+    else:
+        api_key = str(active_cfg.get("apiKey", "")).strip()
+    return active, enabled, model, api_key
+
+
+def _resolve_web(cfg: dict[str, Any]) -> tuple[bool, bool, str, int, str]:
+    web = cfg.get("web")
+    if not isinstance(web, dict):
+        web = {}
+    search = web.get("search")
+    if not isinstance(search, dict):
+        search = {}
+    keys = cfg.get("keys", {})
+
+    web_enabled = _is_enabled(web.get("enabled"), default=True)
+    search_enabled = web_enabled and _is_enabled(search.get("enabled"), default=True)
+    provider = str(search.get("provider", "brave")).strip().lower() or "brave"
+
+    raw_max = search.get("maxResults", 5)
+    try:
+        max_results = int(raw_max)
+    except Exception:
+        max_results = 5
+    max_results = min(max(max_results, 1), 10)
+
+    api_key = str(search.get("apiKey", "")).strip() or str(keys.get("braveApiKey", "")).strip()
+    return web_enabled, search_enabled, provider, max_results, api_key
+
+
 def config_to_env(config: dict[str, Any]) -> dict[str, str]:
     """Map config payload into runtime environment variables."""
     cfg = normalize_config(config)
     agent = cfg.get("agent", {})
     session = cfg.get("session", {})
     channels = cfg.get("channels", {})
-    feishu = channels.get("feishu", {})
-    keys = cfg.get("keys", {})
+    feishu = channels.get("feishu", {}) if isinstance(channels, dict) else {}
+    if not isinstance(feishu, dict):
+        feishu = {}
+    provider_name, provider_enabled, model, provider_api_key = _resolve_provider(cfg)
+    web_enabled, web_search_enabled, web_search_provider, web_search_max_results, web_search_api_key = _resolve_web(
+        cfg
+    )
     debug = cfg.get("debug", False)
 
     env = {
-        "GOOGLE_API_KEY": str(keys.get("googleApiKey", "")).strip(),
-        "SENTIENTAGENT_V2_MODEL": str(agent.get("model", "")).strip(),
+        "GOOGLE_API_KEY": provider_api_key,
+        "SENTIENTAGENT_V2_MODEL": model,
+        "SENTIENTAGENT_V2_PROVIDER": provider_name,
+        "SENTIENTAGENT_V2_PROVIDER_ENABLED": "1" if provider_enabled else "0",
         "SENTIENTAGENT_V2_WORKSPACE": str(agent.get("workspace", "")).strip(),
         "SENTIENTAGENT_V2_BUILTIN_SKILLS_DIR": str(agent.get("builtinSkillsDir", "")).strip(),
         "SENTIENTAGENT_V2_SESSION_BACKEND": str(session.get("backend", "")).strip().lower(),
         "SENTIENTAGENT_V2_SESSION_DB_URL": str(session.get("dbUrl", "")).strip(),
-        "SENTIENTAGENT_V2_CHANNELS": _coerce_channels(channels.get("enabled")),
+        "SENTIENTAGENT_V2_CHANNELS": _resolve_enabled_channels(channels if isinstance(channels, dict) else {}),
         "FEISHU_APP_ID": str(feishu.get("appId", "")).strip(),
         "FEISHU_APP_SECRET": str(feishu.get("appSecret", "")).strip(),
         "FEISHU_ENCRYPT_KEY": str(feishu.get("encryptKey", "")).strip(),
         "FEISHU_VERIFICATION_TOKEN": str(feishu.get("verificationToken", "")).strip(),
-        "BRAVE_API_KEY": str(keys.get("braveApiKey", "")).strip(),
+        "BRAVE_API_KEY": web_search_api_key,
+        "SENTIENTAGENT_V2_WEB_ENABLED": "1" if web_enabled else "0",
+        "SENTIENTAGENT_V2_WEB_SEARCH_ENABLED": "1" if web_search_enabled else "0",
+        "SENTIENTAGENT_V2_WEB_SEARCH_PROVIDER": web_search_provider,
+        "SENTIENTAGENT_V2_WEB_SEARCH_MAX_RESULTS": str(web_search_max_results),
         "SENTIENTAGENT_V2_DEBUG": "1" if bool(debug) else "0",
     }
     return env

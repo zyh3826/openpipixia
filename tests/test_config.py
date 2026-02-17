@@ -27,20 +27,25 @@ class ConfigTests(unittest.TestCase):
     def test_load_missing_returns_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             cfg = load_config(Path(tmp) / "config.json")
-        self.assertEqual(cfg["channels"]["enabled"], ["local"])
+        self.assertTrue(cfg["channels"]["local"]["enabled"])
+        self.assertFalse(cfg["channels"]["feishu"]["enabled"])
+        self.assertTrue(cfg["providers"]["google"]["enabled"])
+        self.assertTrue(cfg["web"]["search"]["enabled"])
         self.assertEqual(cfg["session"]["backend"], "memory")
 
     def test_save_then_load_roundtrip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "config.json"
             cfg = default_config()
-            cfg["channels"]["enabled"] = ["feishu"]
+            cfg["channels"]["local"]["enabled"] = False
+            cfg["channels"]["feishu"]["enabled"] = True
             cfg["channels"]["feishu"]["appId"] = "app-id-1"
             cfg["channels"]["feishu"]["appSecret"] = "app-secret-1"
             save_config(cfg, path)
             loaded = load_config(path)
 
-        self.assertEqual(loaded["channels"]["enabled"], ["feishu"])
+        self.assertFalse(loaded["channels"]["local"]["enabled"])
+        self.assertTrue(loaded["channels"]["feishu"]["enabled"])
         self.assertEqual(loaded["channels"]["feishu"]["appId"], "app-id-1")
         self.assertEqual(loaded["channels"]["feishu"]["appSecret"], "app-secret-1")
 
@@ -48,8 +53,8 @@ class ConfigTests(unittest.TestCase):
         os.environ["SENTIENTAGENT_V2_MODEL"] = "from-shell"
         os.environ["GOOGLE_API_KEY"] = "key-from-shell"
         cfg = default_config()
-        cfg["agent"]["model"] = "from-config"
-        cfg["keys"]["googleApiKey"] = "key-from-config"
+        cfg["providers"]["google"]["model"] = "from-config"
+        cfg["providers"]["google"]["apiKey"] = "key-from-config"
         apply_config_to_env(cfg, overwrite=False)
         self.assertEqual(os.environ["SENTIENTAGENT_V2_MODEL"], "from-shell")
         self.assertEqual(os.environ["GOOGLE_API_KEY"], "key-from-shell")
@@ -62,17 +67,20 @@ class ConfigTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "config.json"
             cfg = default_config()
-            cfg["channels"]["enabled"] = ["feishu"]
+            cfg["channels"]["local"]["enabled"] = False
+            cfg["channels"]["feishu"]["enabled"] = True
             cfg["channels"]["feishu"]["appId"] = "app-id"
             cfg["channels"]["feishu"]["appSecret"] = "app-secret"
             cfg["session"]["backend"] = "sqlite"
-            cfg["keys"]["googleApiKey"] = "google-key"
+            cfg["providers"]["google"]["apiKey"] = "google-key"
+            cfg["web"]["search"]["enabled"] = False
             save_config(cfg, path)
 
             os.environ.pop("SENTIENTAGENT_V2_CHANNELS", None)
             os.environ.pop("FEISHU_APP_ID", None)
             os.environ.pop("SENTIENTAGENT_V2_SESSION_BACKEND", None)
             os.environ.pop("GOOGLE_API_KEY", None)
+            os.environ.pop("SENTIENTAGENT_V2_WEB_SEARCH_ENABLED", None)
             loaded = bootstrap_env_from_config(path)
 
         self.assertIsNotNone(loaded)
@@ -80,6 +88,19 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(os.environ["FEISHU_APP_ID"], "app-id")
         self.assertEqual(os.environ["SENTIENTAGENT_V2_SESSION_BACKEND"], "sqlite")
         self.assertEqual(os.environ["GOOGLE_API_KEY"], "google-key")
+        self.assertEqual(os.environ["SENTIENTAGENT_V2_WEB_SEARCH_ENABLED"], "0")
+
+    def test_legacy_channels_enabled_list_is_still_supported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.json"
+            cfg = default_config()
+            cfg["channels"]["enabled"] = ["feishu"]
+            save_config(cfg, path)
+
+            os.environ.pop("SENTIENTAGENT_V2_CHANNELS", None)
+            bootstrap_env_from_config(path)
+
+        self.assertEqual(os.environ["SENTIENTAGENT_V2_CHANNELS"], "feishu")
 
 
 if __name__ == "__main__":

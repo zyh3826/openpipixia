@@ -155,8 +155,9 @@ python -m pytest -q
 
 通常不需要设置任何环境变量，直接在 `config.json` 里填：
 
-- `keys.googleApiKey`（必填，LLM 调用）
-- `channels.enabled` 和 `channels.feishu.*`（启用 Feishu 时）
+- `providers.google.enabled / apiKey / model`
+- `channels.local.enabled`、`channels.feishu.enabled` 和 `channels.feishu.*`
+- `web.enabled`、`web.search.enabled / provider / apiKey / maxResults`
 
 只在“临时覆盖”时才建议使用 env，例如：
 
@@ -184,30 +185,56 @@ pip install python-socks
 ```json
 {
   "agent": {
-    "model": "gemini-3-flash-preview",
     "workspace": "~/.sentientagent_v2/workspace",
     "builtinSkillsDir": ""
+  },
+  "providers": {
+    "active": "google",
+    "google": {
+      "enabled": true,
+      "apiKey": "your_google_api_key",
+      "model": "gemini-3-flash-preview"
+    },
+    "openai": {
+      "enabled": false,
+      "apiKey": "",
+      "model": ""
+    }
   },
   "session": {
     "backend": "memory",
     "dbUrl": ""
   },
   "channels": {
-    "enabled": ["feishu"],
+    "local": {
+      "enabled": false
+    },
     "feishu": {
+      "enabled": true,
       "appId": "cli_xxx",
       "appSecret": "xxx",
       "encryptKey": "",
       "verificationToken": ""
     }
   },
+  "web": {
+    "enabled": true,
+    "search": {
+      "enabled": true,
+      "provider": "brave",
+      "apiKey": "your_brave_api_key",
+      "maxResults": 5
+    }
+  },
   "keys": {
-    "googleApiKey": "your_google_api_key",
+    "googleApiKey": "",
     "braveApiKey": ""
   },
   "debug": false
 }
 ```
+
+`keys.*` 是兼容旧配置的后备字段，建议优先使用 `providers.*` 和 `web.*`。
 
 ## Acknowledgements
 

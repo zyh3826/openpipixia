@@ -23,6 +23,13 @@ from .runtime.tool_context import get_route
 _OUTBOUND_PUBLISHER: Callable[[OutboundMessage], Awaitable[None]] | None = None
 
 
+def _flag_enabled(env_name: str, default: bool = False) -> bool:
+    value = os.getenv(env_name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
 def _workspace() -> Path:
     workspace_env = os.getenv("SENTIENTAGENT_V2_WORKSPACE")
     return Path(workspace_env).expanduser().resolve() if workspace_env else Path.cwd().resolve()
@@ -184,10 +191,29 @@ def _validate_http_url(url: str) -> tuple[bool, str]:
 def web_search(query: str, count: int = 5) -> str:
     """Search the web via Brave Search API."""
     _debug("tool.web_search.input", {"query": query, "count": count})
+    if not _flag_enabled("SENTIENTAGENT_V2_WEB_ENABLED", default=True):
+        return _ret("tool.web_search.output", "Error: web tools are disabled in configuration")
+    if not _flag_enabled("SENTIENTAGENT_V2_WEB_SEARCH_ENABLED", default=True):
+        return _ret("tool.web_search.output", "Error: web_search is disabled in configuration")
+
+    provider = os.getenv("SENTIENTAGENT_V2_WEB_SEARCH_PROVIDER", "brave").strip().lower() or "brave"
+    if provider != "brave":
+        return _ret(
+            "tool.web_search.output",
+            f"Error: web_search provider '{provider}' is not supported yet (supported: brave)",
+        )
+
+    max_results_raw = os.getenv("SENTIENTAGENT_V2_WEB_SEARCH_MAX_RESULTS", "10").strip()
+    try:
+        max_results = int(max_results_raw)
+    except ValueError:
+        max_results = 10
+    max_results = min(max(max_results, 1), 10)
+
     api_key = os.getenv("BRAVE_API_KEY", "")
     if not api_key:
         return _ret("tool.web_search.output", "Error: BRAVE_API_KEY not configured")
-    n = min(max(count, 1), 10)
+    n = min(max(count, 1), max_results)
     url = f"https://api.search.brave.com/res/v1/web/search?q={query}&count={n}"
     req = Request(
         url,

@@ -28,6 +28,13 @@ from .runtime.session_service import load_session_backend_config
 from .skills import get_registry
 
 
+def _env_enabled(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
 def _cmd_skills() -> int:
     registry = get_registry()
     payload = [
@@ -47,9 +54,17 @@ def _cmd_doctor() -> int:
     issues: list[str] = []
     if shutil.which("adk") is None:
         issues.append("Missing `adk` CLI. Install with: pip install google-adk")
-    if not os.getenv("GOOGLE_API_KEY", "").strip():
+    provider_name = os.getenv("SENTIENTAGENT_V2_PROVIDER", "google").strip().lower() or "google"
+    provider_enabled = _env_enabled("SENTIENTAGENT_V2_PROVIDER_ENABLED", default=True)
+    if not provider_enabled:
+        issues.append("No provider is enabled. Enable one in config (e.g. providers.google.enabled=true).")
+    if provider_enabled and provider_name != "google":
         issues.append(
-            "Missing Google API key. Set `keys.googleApiKey` in ~/.sentientagent_v2/config.json "
+            f"Provider '{provider_name}' is enabled in config, but runtime currently supports only 'google'."
+        )
+    if provider_enabled and not os.getenv("GOOGLE_API_KEY", "").strip():
+        issues.append(
+            "Missing Google API key. Set `providers.google.apiKey` in ~/.sentientagent_v2/config.json "
             "or export GOOGLE_API_KEY."
         )
 
@@ -60,12 +75,23 @@ def _cmd_doctor() -> int:
     configured_channels = parse_enabled_channels(None)
     channel_issues = validate_channel_setup(configured_channels)
     issues.extend(channel_issues)
+    web_enabled = _env_enabled("SENTIENTAGENT_V2_WEB_ENABLED", default=True)
+    web_search_enabled = _env_enabled("SENTIENTAGENT_V2_WEB_SEARCH_ENABLED", default=True)
+    web_search_provider = os.getenv("SENTIENTAGENT_V2_WEB_SEARCH_PROVIDER", "brave").strip().lower() or "brave"
+    web_search_key_configured = bool(os.getenv("BRAVE_API_KEY", "").strip())
 
     print(f"Config file: {config_path}" + (" (found)" if config_path.exists() else " (not found)"))
     print(f"Workspace: {registry.workspace}")
     print(f"Detected skills: {skills_count}")
+    print(f"Provider: {provider_name} (enabled={provider_enabled})")
     print(f"Session backend: {backend.backend}" + (f" ({backend.db_url})" if backend.db_url else ""))
     print(f"Configured channels: {', '.join(configured_channels) if configured_channels else '(none)'}")
+    print(
+        "Web search: "
+        f"enabled={web_enabled and web_search_enabled}, "
+        f"provider={web_search_provider}, "
+        f"api_key={'configured' if web_search_key_configured else 'missing'}"
+    )
 
     if issues:
         print("\nIssues:")
@@ -110,9 +136,10 @@ def _cmd_onboard(force: bool) -> int:
     print("")
     print("Next steps:")
     print(f"1. Edit config: {saved_to}")
-    print("2. Fill keys.googleApiKey (and channel credentials if needed)")
-    print("3. Start gateway: sentientagent_v2 gateway")
-    print("4. Dry run: sentientagent_v2 doctor")
+    print("2. Configure providers/channels/web sections and their `enabled` flags")
+    print("3. Fill providers.google.apiKey (and channel credentials if needed)")
+    print("4. Start gateway: sentientagent_v2 gateway")
+    print("5. Dry run: sentientagent_v2 doctor")
     return 0
 
 
