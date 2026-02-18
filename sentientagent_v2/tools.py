@@ -10,15 +10,16 @@ import re
 import shlex
 import subprocess
 import sys
-import uuid
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
+from zoneinfo import ZoneInfo
 
 from .bus.events import OutboundMessage
 from .env_utils import env_enabled
+from .runtime.cron_service import CronSchedule, CronService
 from .runtime.tool_context import get_route
 from .security import PathGuard, SecurityPolicy, load_security_policy
 
@@ -498,20 +499,27 @@ def _cron_store_path() -> Path:
     return _workspace() / ".sentientagent_v2" / "cron_jobs.json"
 
 
-def _load_cron_jobs() -> list[dict[str, Any]]:
-    path = _cron_store_path()
-    if not path.exists():
-        return []
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return []
+def _cron_service() -> CronService:
+    return CronService(_cron_store_path())
 
 
-def _save_cron_jobs(jobs: list[dict[str, Any]]) -> None:
-    path = _cron_store_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(jobs, ensure_ascii=False, indent=2), encoding="utf-8")
+def _format_job_schedule(job: Any) -> str:
+    schedule = getattr(job, "schedule", None)
+    if schedule is None:
+        return "unknown"
+    kind = getattr(schedule, "kind", "")
+    if kind == "every":
+        return f"every:{getattr(schedule, 'every_seconds', 0)}s"
+    if kind == "cron":
+        expr = getattr(schedule, "cron_expr", "") or ""
+        tz = getattr(schedule, "tz", None)
+        return f"cron:{expr} ({tz})" if tz else f"cron:{expr}"
+    if kind == "at":
+        at_ms = getattr(schedule, "at_ms", None)
+        if at_ms:
+            return f"at:{dt.datetime.fromtimestamp(at_ms / 1000).isoformat(timespec='seconds')}"
+        return "at:unknown"
+    return str(kind or "unknown")
 
 
 def cron(
@@ -521,8 +529,12 @@ def cron(
     cron_expr: str | None = None,
     at: str | None = None,
     job_id: str | None = None,
+    tz: str | None = None,
+    deliver: bool | None = None,
+    channel: str | None = None,
+    chat_id: str | None = None,
 ) -> str:
-    """Manage simple persisted cron jobs: add/list/remove."""
+    """Manage persisted cron jobs: add/list/remove."""
     _debug(
         "tool.cron.input",
         {
@@ -532,16 +544,21 @@ def cron(
             "cron_expr": cron_expr,
             "at": at,
             "job_id": job_id,
+            "tz": tz,
+            "deliver": deliver,
+            "channel": channel,
+            "chat_id": chat_id,
         },
     )
-    jobs = _load_cron_jobs()
+    service = _cron_service()
 
     if action == "list":
+        jobs = service.list_jobs(include_disabled=True)
         if not jobs:
             return _ret("tool.cron.output", "No scheduled jobs.")
         lines = ["Scheduled jobs:"]
-        for j in jobs:
-            lines.append(f"- {j['name']} (id: {j['id']}, {j['schedule']})")
+        for job in jobs:
+            lines.append(f"- {job.name} (id: {job.id}, {_format_job_schedule(job)})")
         result = "\n".join(lines)
         _debug("tool.cron.output", {"action": action, "jobs": len(jobs)})
         return result
@@ -549,11 +566,8 @@ def cron(
     if action == "remove":
         if not job_id:
             return _ret("tool.cron.output", "Error: job_id is required for remove")
-        before = len(jobs)
-        jobs = [j for j in jobs if j["id"] != job_id]
-        if len(jobs) == before:
+        if not service.remove_job(job_id):
             return _ret("tool.cron.output", f"Job {job_id} not found")
-        _save_cron_jobs(jobs)
         result = f"Removed job {job_id}"
         _debug("tool.cron.output", result)
         return result
@@ -561,26 +575,39 @@ def cron(
     if action == "add":
         if not message:
             return _ret("tool.cron.output", "Error: message is required for add")
-        schedule = ""
+        schedule: CronSchedule
+        delete_after_run = False
         if every_seconds:
-            schedule = f"every:{every_seconds}s"
+            schedule = CronSchedule(kind="every", every_seconds=every_seconds)
         elif cron_expr:
-            schedule = f"cron:{cron_expr}"
+            if tz:
+                try:
+                    ZoneInfo(tz)
+                except Exception:
+                    return _ret("tool.cron.output", f"Error: unknown timezone '{tz}'")
+            schedule = CronSchedule(kind="cron", cron_expr=cron_expr, tz=tz)
         elif at:
-            schedule = f"at:{at}"
+            try:
+                at_ms = int(dt.datetime.fromisoformat(at).timestamp() * 1000)
+            except ValueError:
+                return _ret("tool.cron.output", "Error: `at` must be a valid ISO datetime string")
+            schedule = CronSchedule(kind="at", at_ms=at_ms)
+            delete_after_run = True
         else:
             return _ret("tool.cron.output", "Error: either every_seconds, cron_expr, or at is required")
 
-        new_job = {
-            "id": uuid.uuid4().hex[:8],
-            "name": message[:30],
-            "message": message,
-            "schedule": schedule,
-            "created_at": dt.datetime.now().isoformat(timespec="seconds"),
-        }
-        jobs.append(new_job)
-        _save_cron_jobs(jobs)
-        result = f"Created job '{new_job['name']}' (id: {new_job['id']})"
+        target_channel, target_chat_id = _resolve_route(channel, chat_id)
+        deliver_enabled = True if deliver is None else bool(deliver)
+        job = service.add_job(
+            name=message[:30],
+            schedule=schedule,
+            message=message,
+            deliver=deliver_enabled,
+            channel=target_channel,
+            to=target_chat_id,
+            delete_after_run=delete_after_run,
+        )
+        result = f"Created job '{job.name}' (id: {job.id})"
         _debug("tool.cron.output", result)
         return result
 

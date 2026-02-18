@@ -111,11 +111,22 @@ class ToolsTests(unittest.TestCase):
     def test_cron_tool_add_list_remove(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             os.environ["SENTIENTAGENT_V2_WORKSPACE"] = tmp
-            create = cron(action="add", message="remind me", every_seconds=30)
+            with route_context("telegram", "u2"):
+                create = cron(action="add", message="remind me", every_seconds=30)
             self.assertIn("Created job", create)
+            store_path = Path(tmp) / ".sentientagent_v2" / "cron_jobs.json"
+            self.assertTrue(store_path.exists())
+            payload = json.loads(store_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload.get("version"), 2)
+            self.assertTrue(payload.get("jobs"))
+            first = payload["jobs"][0]
+            self.assertTrue(first["payload"]["deliver"])
+            self.assertEqual(first["payload"]["channel"], "telegram")
+            self.assertEqual(first["payload"]["to"], "u2")
 
             listing = cron(action="list")
             self.assertIn("Scheduled jobs", listing)
+            self.assertIn("every:30s", listing)
 
             job_id = create.split("(id: ", 1)[1].rstrip(")")
             removed = cron(action="remove", job_id=job_id)

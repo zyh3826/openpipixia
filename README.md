@@ -48,7 +48,7 @@ The agent exposes two skill tools:
 - `web_search`, `web_fetch`
 - `message` (local outbox log)
 - `message_image` (upload/send image on channels that support image messages, e.g. Feishu)
-- `cron` (local persisted add/list/remove)
+- `cron` (runtime scheduler + local persisted job store + delivery routing)
 
 ## Installation
 
@@ -137,6 +137,42 @@ sentientagent_v2 gateway
 
 When users send file/image attachments in Feishu (for example PDF or image), `sentientagent_v2`
 downloads them to `SENTIENTAGENT_V2_WORKSPACE/inbox/feishu/` and forwards local paths to the agent.
+
+## Cron Scheduler
+
+`sentientagent_v2` cron is an in-process scheduler. It does not write to OS crontab.
+Jobs are executed only while gateway is running.
+
+- Store file: `SENTIENTAGENT_V2_WORKSPACE/.sentientagent_v2/cron_jobs.json`
+- Supported schedules: `every`, `cron` (+`tz`), `at` (one-shot)
+- Delivery loop: when `deliver=true`, execution output is pushed to configured channel/recipient
+- Compatibility: legacy cron records are still readable and normalized at runtime
+
+### CLI examples
+
+```bash
+# list jobs
+sentientagent_v2 cron list
+
+# add recurring job (every 5 minutes)
+sentientagent_v2 cron add --name weather --message "check weather and summarize" --every 300
+
+# add cron expression with timezone
+sentientagent_v2 cron add --name daily --message "daily report" --cron "0 9 * * 1-5" --tz Asia/Shanghai
+
+# add one-shot job
+sentientagent_v2 cron add --name reminder --message "remind me to review PR" --at 2026-02-19T09:30:00
+
+# enable outbound delivery
+sentientagent_v2 cron add --name push --message "send update" --every 600 --deliver --channel feishu --to ou_xxx
+
+# manual operations
+sentientagent_v2 cron run <job_id>
+sentientagent_v2 cron enable <job_id>
+sentientagent_v2 cron enable <job_id> --disable
+sentientagent_v2 cron remove <job_id>
+sentientagent_v2 cron status
+```
 
 ## Classic Usage Examples
 

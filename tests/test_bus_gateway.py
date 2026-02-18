@@ -5,11 +5,12 @@ from __future__ import annotations
 import asyncio
 import types as pytypes
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from sentientagent_v2.bus.events import InboundMessage, OutboundMessage
 from sentientagent_v2.bus.queue import MessageBus
 from sentientagent_v2.gateway import Gateway
+from sentientagent_v2.runtime.cron_service import CronJob, CronJobState, CronPayload, CronSchedule
 
 
 class MessageBusTests(unittest.IsolatedAsyncioTestCase):
@@ -99,6 +100,56 @@ class GatewayLoopResilienceTests(unittest.IsolatedAsyncioTestCase):
             task.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await task
+
+
+class GatewayCronTests(unittest.IsolatedAsyncioTestCase):
+    async def test_start_and_stop_manage_cron_service(self) -> None:
+        class _FakeRunner:
+            async def run_async(self, **kwargs):
+                if False:
+                    yield  # pragma: no cover
+
+        fake_agent = pytypes.SimpleNamespace(name="sentientagent_v2")
+        fake_cron_service = pytypes.SimpleNamespace(start=AsyncMock(), stop=Mock())
+        with patch("sentientagent_v2.gateway.create_runner", return_value=(_FakeRunner(), object())):
+            with patch("sentientagent_v2.gateway.CronService", return_value=fake_cron_service):
+                gateway = Gateway(agent=fake_agent, app_name="sentientagent_v2", bus=MessageBus())
+                await gateway.start()
+                fake_cron_service.start.assert_awaited_once()
+                await gateway.stop()
+                fake_cron_service.stop.assert_called_once()
+
+    async def test_run_cron_job_delivers_outbound_when_enabled(self) -> None:
+        fake_event = pytypes.SimpleNamespace(
+            content=pytypes.SimpleNamespace(parts=[pytypes.SimpleNamespace(text="cron answer")])
+        )
+
+        class _FakeRunner:
+            async def run_async(self, **kwargs):
+                yield fake_event
+
+        fake_agent = pytypes.SimpleNamespace(name="sentientagent_v2")
+        with patch("sentientagent_v2.gateway.create_runner", return_value=(_FakeRunner(), object())):
+            bus = MessageBus()
+            gateway = Gateway(agent=fake_agent, app_name="sentientagent_v2", bus=bus)
+
+        job = CronJob(
+            id="job12345",
+            name="demo",
+            enabled=True,
+            schedule=CronSchedule(kind="every", every_seconds=60),
+            payload=CronPayload(message="do work", deliver=True, channel="local", to="c1"),
+            state=CronJobState(),
+            created_at_ms=0,
+            updated_at_ms=0,
+        )
+        result = await gateway._run_cron_job(job)
+        self.assertEqual(result, "cron answer")
+
+        outbound = await asyncio.wait_for(bus.consume_outbound(), timeout=0.5)
+        self.assertEqual(outbound.channel, "local")
+        self.assertEqual(outbound.chat_id, "c1")
+        self.assertEqual(outbound.content, "cron answer")
 
 
 if __name__ == "__main__":

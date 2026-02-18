@@ -114,6 +114,92 @@ class CLITests(unittest.TestCase):
         self.assertEqual(code, 0)
         mocked_print.assert_called_with("hello world")
 
+    def test_cron_list_mode_dispatch(self) -> None:
+        from sentientagent_v2 import cli
+
+        with patch.object(cli, "bootstrap_env_from_config") as mocked_bootstrap:
+            with patch.object(cli, "_cmd_cron_list", return_value=0) as mocked_list:
+                with self.assertRaises(SystemExit) as ctx:
+                    cli.main(["cron", "list"])
+                self.assertEqual(ctx.exception.code, 0)
+                mocked_list.assert_called_once_with(include_disabled=False)
+                mocked_bootstrap.assert_called_once()
+
+    def test_cron_add_dispatch_does_not_trigger_single_turn_message(self) -> None:
+        from sentientagent_v2 import cli
+
+        with patch.object(cli, "bootstrap_env_from_config") as mocked_bootstrap:
+            with patch.object(cli, "_cmd_message", return_value=0) as mocked_message:
+                with patch.object(cli, "_cmd_cron_add", return_value=0) as mocked_add:
+                    with self.assertRaises(SystemExit) as ctx:
+                        cli.main(
+                            [
+                                "cron",
+                                "add",
+                                "--name",
+                                "demo",
+                                "--message",
+                                "hello cron",
+                                "--every",
+                                "30",
+                            ]
+                        )
+                    self.assertEqual(ctx.exception.code, 0)
+                    mocked_add.assert_called_once_with(
+                        name="demo",
+                        message="hello cron",
+                        every=30,
+                        cron_expr=None,
+                        tz=None,
+                        at=None,
+                        deliver=False,
+                        to=None,
+                        channel=None,
+                    )
+                    mocked_message.assert_not_called()
+                    mocked_bootstrap.assert_called_once()
+
+    def test_cmd_cron_add_validates_deliver_target(self) -> None:
+        from sentientagent_v2 import cli
+
+        with patch("builtins.print") as mocked_print:
+            code = cli._cmd_cron_add(
+                name="demo",
+                message="hello",
+                every=30,
+                cron_expr=None,
+                tz=None,
+                at=None,
+                deliver=True,
+                to=None,
+                channel=None,
+            )
+        self.assertEqual(code, 1)
+        mocked_print.assert_called_with("Error: --to is required when --deliver is set")
+
+    def test_cmd_cron_add_persists_job(self) -> None:
+        from sentientagent_v2 import cli
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"SENTIENTAGENT_V2_WORKSPACE": tmp}, clear=False):
+                with patch("builtins.print") as mocked_print:
+                    code = cli._cmd_cron_add(
+                        name="demo",
+                        message="hello cron",
+                        every=30,
+                        cron_expr=None,
+                        tz=None,
+                        at=None,
+                        deliver=False,
+                        to=None,
+                        channel=None,
+                    )
+            self.assertEqual(code, 0)
+            out = mocked_print.call_args[0][0]
+            self.assertIn("Added job 'demo'", out)
+            store = Path(tmp) / ".sentientagent_v2" / "cron_jobs.json"
+            self.assertTrue(store.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

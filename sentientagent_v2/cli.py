@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import datetime as dt
 import json
 import os
 import shutil
@@ -11,6 +12,7 @@ import subprocess
 import sys
 import uuid
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from google.genai import types
 
@@ -25,6 +27,7 @@ from .config import (
 from .env_utils import env_enabled
 from .provider import normalize_model_name, normalize_provider_name, provider_api_key_env, validate_provider_runtime
 from .runtime.adk_utils import extract_text, merge_text_stream
+from .runtime.cron_service import CronSchedule, CronService
 from .runtime.runner_factory import create_runner
 from .runtime.session_service import load_session_config
 from .security import load_security_policy
@@ -255,6 +258,145 @@ def _cmd_message(message: str, user_id: str, session_id: str) -> int:
     return 0
 
 
+def _cron_service() -> CronService:
+    workspace = load_security_policy().workspace_root
+    store_path = workspace / ".sentientagent_v2" / "cron_jobs.json"
+    return CronService(store_path)
+
+
+def _format_schedule(job) -> str:
+    schedule = job.schedule
+    if schedule.kind == "every":
+        return f"every:{schedule.every_seconds}s"
+    if schedule.kind == "cron":
+        return f"cron:{schedule.cron_expr} ({schedule.tz})" if schedule.tz else f"cron:{schedule.cron_expr}"
+    if schedule.kind == "at":
+        if schedule.at_ms is None:
+            return "at:unknown"
+        return f"at:{dt.datetime.fromtimestamp(schedule.at_ms / 1000).isoformat(timespec='seconds')}"
+    return schedule.kind
+
+
+def _format_ts(ms: int | None) -> str:
+    if ms is None:
+        return "-"
+    return dt.datetime.fromtimestamp(ms / 1000).isoformat(timespec="seconds")
+
+
+def _cmd_cron_list(*, include_disabled: bool) -> int:
+    service = _cron_service()
+    jobs = service.list_jobs(include_disabled=include_disabled)
+    if not jobs:
+        print("No scheduled jobs.")
+        return 0
+    print("Scheduled jobs:")
+    for job in jobs:
+        status = "enabled" if job.enabled else "disabled"
+        print(f"- {job.name} (id: {job.id}, {_format_schedule(job)}, {status}, next={_format_ts(job.state.next_run_at_ms)})")
+    return 0
+
+
+def _cmd_cron_add(
+    *,
+    name: str,
+    message: str,
+    every: int | None,
+    cron_expr: str | None,
+    tz: str | None,
+    at: str | None,
+    deliver: bool,
+    to: str | None,
+    channel: str | None,
+) -> int:
+    if tz and not cron_expr:
+        print("Error: --tz can only be used with --cron")
+        return 1
+    if deliver and not to:
+        print("Error: --to is required when --deliver is set")
+        return 1
+
+    schedule: CronSchedule
+    delete_after_run = False
+    if every:
+        if every <= 0:
+            print("Error: --every must be > 0")
+            return 1
+        schedule = CronSchedule(kind="every", every_seconds=every)
+    elif cron_expr:
+        if tz:
+            try:
+                ZoneInfo(tz)
+            except Exception:
+                print(f"Error: unknown timezone '{tz}'")
+                return 1
+        schedule = CronSchedule(kind="cron", cron_expr=cron_expr, tz=tz)
+    elif at:
+        try:
+            at_ms = int(dt.datetime.fromisoformat(at).timestamp() * 1000)
+        except ValueError:
+            print("Error: --at must be a valid ISO datetime")
+            return 1
+        schedule = CronSchedule(kind="at", at_ms=at_ms)
+        delete_after_run = True
+    else:
+        print("Error: must provide one of --every, --cron, --at")
+        return 1
+
+    target_channel = channel or "local"
+    target_to = to or "default"
+    job = _cron_service().add_job(
+        name=name,
+        schedule=schedule,
+        message=message,
+        deliver=deliver,
+        channel=target_channel,
+        to=target_to,
+        delete_after_run=delete_after_run,
+    )
+    print(f"Added job '{job.name}' ({job.id})")
+    return 0
+
+
+def _cmd_cron_remove(job_id: str) -> int:
+    if _cron_service().remove_job(job_id):
+        print(f"Removed job {job_id}")
+        return 0
+    print(f"Job {job_id} not found")
+    return 1
+
+
+def _cmd_cron_enable(job_id: str, *, disable: bool) -> int:
+    job = _cron_service().enable_job(job_id, enabled=not disable)
+    if job is None:
+        print(f"Job {job_id} not found")
+        return 1
+    state = "disabled" if disable else "enabled"
+    print(f"Job '{job.name}' {state}")
+    return 0
+
+
+def _cmd_cron_run(job_id: str, *, force: bool) -> int:
+    async def _run() -> bool:
+        return await _cron_service().run_job(job_id, force=force)
+
+    if asyncio.run(_run()):
+        print("Job executed")
+        return 0
+    print(f"Failed to run job {job_id}")
+    return 1
+
+
+def _cmd_cron_status() -> int:
+    info = _cron_service().status()
+    print(
+        "Cron status: "
+        f"running={info['running']}, "
+        f"jobs={info['jobs']}, "
+        f"next_wake_at={_format_ts(info['next_wake_at_ms'])}"
+    )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="sentientagent_v2",
@@ -305,12 +447,42 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Enable terminal input loop when local channel is enabled.",
     )
+    cron_parser = subparsers.add_parser("cron", help="Manage scheduled tasks.")
+    cron_subparsers = cron_parser.add_subparsers(dest="cron_command", required=True)
+
+    cron_list_parser = cron_subparsers.add_parser("list", help="List scheduled cron jobs.")
+    cron_list_parser.add_argument("--all", action="store_true", help="Include disabled jobs.")
+
+    cron_add_parser = cron_subparsers.add_parser("add", help="Add a cron job.")
+    cron_add_parser.add_argument("--name", required=True, help="Job name.")
+    cron_add_parser.add_argument("--message", required=True, help="Task message sent to agent.")
+    cron_add_parser.add_argument("--every", type=int, default=None, help="Run every N seconds.")
+    cron_add_parser.add_argument("--cron", dest="cron_expr", default=None, help="Cron expression.")
+    cron_add_parser.add_argument("--tz", default=None, help="IANA timezone (with --cron).")
+    cron_add_parser.add_argument("--at", default=None, help="Run once at ISO datetime.")
+    cron_add_parser.add_argument("--deliver", action="store_true", help="Deliver response to channel.")
+    cron_add_parser.add_argument("--to", default=None, help="Recipient id for delivery.")
+    cron_add_parser.add_argument("--channel", default=None, help="Target channel for delivery.")
+
+    cron_remove_parser = cron_subparsers.add_parser("remove", help="Remove a cron job.")
+    cron_remove_parser.add_argument("job_id", help="Cron job id.")
+
+    cron_enable_parser = cron_subparsers.add_parser("enable", help="Enable or disable a cron job.")
+    cron_enable_parser.add_argument("job_id", help="Cron job id.")
+    cron_enable_parser.add_argument("--disable", action="store_true", help="Disable instead of enable.")
+
+    cron_run_parser = cron_subparsers.add_parser("run", help="Run a cron job immediately.")
+    cron_run_parser.add_argument("job_id", help="Cron job id.")
+    cron_run_parser.add_argument("--force", action="store_true", help="Run even if job is disabled.")
+
+    cron_subparsers.add_parser("status", help="Show cron runtime status.")
 
     args = parser.parse_args(argv)
     if args.command != "onboard":
         bootstrap_env_from_config()
 
-    if args.message:
+    # Global `-m/--message` is single-turn mode only when no subcommand is used.
+    if args.command is None and args.message:
         sid = args.session_id or uuid.uuid4().hex[:12]
         code = _cmd_message(args.message, user_id=args.user_id, session_id=sid)
     elif args.command == "onboard":
@@ -330,6 +502,32 @@ def main(argv: list[str] | None = None) -> None:
             chat_id=args.chat_id,
             interactive_local=args.interactive_local,
         )
+    elif args.command == "cron":
+        if args.cron_command == "list":
+            code = _cmd_cron_list(include_disabled=args.all)
+        elif args.cron_command == "add":
+            code = _cmd_cron_add(
+                name=args.name,
+                message=args.message,
+                every=args.every,
+                cron_expr=args.cron_expr,
+                tz=args.tz,
+                at=args.at,
+                deliver=args.deliver,
+                to=args.to,
+                channel=args.channel,
+            )
+        elif args.cron_command == "remove":
+            code = _cmd_cron_remove(args.job_id)
+        elif args.cron_command == "enable":
+            code = _cmd_cron_enable(args.job_id, disable=args.disable)
+        elif args.cron_command == "run":
+            code = _cmd_cron_run(args.job_id, force=args.force)
+        elif args.cron_command == "status":
+            code = _cmd_cron_status()
+        else:
+            parser.print_help()
+            code = 2
     else:
         parser.print_help()
         code = 2
