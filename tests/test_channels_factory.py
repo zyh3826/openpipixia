@@ -33,10 +33,21 @@ class ChannelFactoryTests(unittest.TestCase):
         issues = validate_channel_setup(["unknown"])
         self.assertTrue(any("Unsupported channels" in item for item in issues))
 
+    def test_validate_reports_known_but_unimplemented_channel(self) -> None:
+        issues = validate_channel_setup(["telegram"])
+        self.assertTrue(any("not implemented yet" in item for item in issues))
+        self.assertFalse(any("Unsupported channels" in item for item in issues))
+
     def test_build_local_channel_manager(self) -> None:
         manager, local_channel = build_channel_manager(bus=MessageBus(), channel_names=["local"])
         self.assertIsNotNone(local_channel)
         self.assertIn("local", manager.channels)
+
+    def test_build_manager_skips_unimplemented_channel(self) -> None:
+        manager, local_channel = build_channel_manager(bus=MessageBus(), channel_names=["local", "telegram"])
+        self.assertIsNotNone(local_channel)
+        self.assertIn("local", manager.channels)
+        self.assertNotIn("telegram", manager.channels)
 
 
 if __name__ == "__main__":

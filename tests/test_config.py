@@ -30,6 +30,14 @@ class ConfigTests(unittest.TestCase):
             cfg = load_config(Path(tmp) / "config.json")
         self.assertTrue(cfg["channels"]["local"]["enabled"])
         self.assertFalse(cfg["channels"]["feishu"]["enabled"])
+        self.assertIn("telegram", cfg["channels"])
+        self.assertIn("whatsapp", cfg["channels"])
+        self.assertIn("discord", cfg["channels"])
+        self.assertIn("mochat", cfg["channels"])
+        self.assertIn("dingtalk", cfg["channels"])
+        self.assertIn("email", cfg["channels"])
+        self.assertIn("slack", cfg["channels"])
+        self.assertIn("qq", cfg["channels"])
         self.assertTrue(cfg["providers"]["google"]["enabled"])
         self.assertTrue(cfg["web"]["search"]["enabled"])
         self.assertEqual(cfg["session"]["dbUrl"], "")
@@ -109,6 +117,20 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(os.environ["SENTIENTAGENT_V2_ALLOW_NETWORK"], "0")
         self.assertEqual(os.environ["SENTIENTAGENT_V2_EXEC_ALLOWLIST"], "python,ls")
         self.assertNotIn("BRAVE_API_KEY", os.environ)
+
+    def test_bootstrap_env_includes_future_enabled_channels(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.json"
+            cfg = default_config()
+            cfg["channels"]["local"]["enabled"] = False
+            cfg["channels"]["telegram"]["enabled"] = True
+            cfg["channels"]["qq"]["enabled"] = True
+            save_config(cfg, path)
+
+            os.environ.pop("SENTIENTAGENT_V2_CHANNELS", None)
+            bootstrap_env_from_config(path)
+
+        self.assertEqual(os.environ["SENTIENTAGENT_V2_CHANNELS"], "telegram,qq")
 
     def test_bootstrap_env_overwrites_and_clears_managed_keys(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

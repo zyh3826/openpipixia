@@ -15,6 +15,20 @@ from .provider import default_model_for_provider, normalize_model_name, provider
 from .security import normalize_allowlist
 
 
+_CONFIG_CHANNEL_ORDER: tuple[str, ...] = (
+    "local",
+    "feishu",
+    "telegram",
+    "whatsapp",
+    "discord",
+    "mochat",
+    "dingtalk",
+    "email",
+    "slack",
+    "qq",
+)
+
+
 def get_data_dir() -> Path:
     """Return the data directory used by sentientagent_v2."""
     return Path.home() / ".sentientagent_v2"
@@ -67,6 +81,84 @@ def default_config() -> dict[str, Any]:
                 "appSecret": "",
                 "encryptKey": "",
                 "verificationToken": "",
+            },
+            "telegram": {
+                "enabled": False,
+                "token": "",
+                "proxy": "",
+                "allowFrom": [],
+            },
+            "whatsapp": {
+                "enabled": False,
+                "bridgeUrl": "ws://localhost:3001",
+                "bridgeToken": "",
+                "allowFrom": [],
+            },
+            "discord": {
+                "enabled": False,
+                "token": "",
+                "gatewayUrl": "wss://gateway.discord.gg/?v=10&encoding=json",
+                "intents": 37377,
+                "allowFrom": [],
+            },
+            "mochat": {
+                "enabled": False,
+                "baseUrl": "https://mochat.io",
+                "clawToken": "",
+                "agentUserId": "",
+                "sessions": [],
+                "panels": [],
+                "allowFrom": [],
+            },
+            "dingtalk": {
+                "enabled": False,
+                "clientId": "",
+                "clientSecret": "",
+                "allowFrom": [],
+            },
+            "email": {
+                "enabled": False,
+                "consentGranted": False,
+                "imapHost": "",
+                "imapPort": 993,
+                "imapUsername": "",
+                "imapPassword": "",
+                "imapMailbox": "INBOX",
+                "imapUseSsl": True,
+                "smtpHost": "",
+                "smtpPort": 587,
+                "smtpUsername": "",
+                "smtpPassword": "",
+                "smtpUseTls": True,
+                "smtpUseSsl": False,
+                "fromAddress": "",
+                "autoReplyEnabled": True,
+                "pollIntervalSeconds": 30,
+                "markSeen": True,
+                "maxBodyChars": 12000,
+                "subjectPrefix": "Re: ",
+                "allowFrom": [],
+            },
+            "slack": {
+                "enabled": False,
+                "mode": "socket",
+                "botToken": "",
+                "appToken": "",
+                "replyInThread": True,
+                "reactEmoji": "eyes",
+                "groupPolicy": "mention",
+                "groupAllowFrom": [],
+                "dm": {
+                    "enabled": True,
+                    "policy": "open",
+                    "allowFrom": [],
+                },
+            },
+            "qq": {
+                "enabled": False,
+                "appId": "",
+                "secret": "",
+                "allowFrom": [],
             },
         },
         "web": {
@@ -150,7 +242,7 @@ def save_config(config: dict[str, Any], config_path: Path | None = None) -> Path
 def _resolve_enabled_channels(channels: dict[str, Any]) -> str:
     """Resolve enabled channel names from per-channel enabled flags."""
     names: list[str] = []
-    for name in ("local", "feishu"):
+    for name in _CONFIG_CHANNEL_ORDER:
         raw = channels.get(name)
         if isinstance(raw, dict):
             enabled = is_enabled(raw.get("enabled"), default=(name == "local"))

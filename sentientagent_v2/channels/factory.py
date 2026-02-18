@@ -6,9 +6,9 @@ import os
 from typing import Callable
 
 from ..bus.queue import MessageBus
-from .feishu import FEISHU_AVAILABLE, FeishuChannel
 from .local import LocalChannel
 from .manager import ChannelManager
+from .registry import get_channel_spec, known_channel_names
 
 
 def parse_enabled_channels(channels: str | None) -> list[str]:
@@ -23,18 +23,16 @@ def parse_enabled_channels(channels: str | None) -> list[str]:
 
 def validate_channel_setup(channel_names: list[str]) -> list[str]:
     issues: list[str] = []
-    supported = {"local", "feishu"}
+    supported = set(known_channel_names())
     unknown = [name for name in channel_names if name not in supported]
     if unknown:
         issues.append(f"Unsupported channels: {', '.join(unknown)}")
 
-    if "feishu" in channel_names:
-        if not FEISHU_AVAILABLE:
-            issues.append("Feishu channel requires `lark-oapi` (pip install lark-oapi).")
-        if not os.getenv("FEISHU_APP_ID", "").strip():
-            issues.append("Missing FEISHU_APP_ID for feishu channel.")
-        if not os.getenv("FEISHU_APP_SECRET", "").strip():
-            issues.append("Missing FEISHU_APP_SECRET for feishu channel.")
+    for name in channel_names:
+        spec = get_channel_spec(name)
+        if spec is None:
+            continue
+        issues.extend(spec.validate_setup())
     return issues
 
 
@@ -49,21 +47,15 @@ def build_channel_manager(
     local_channel: LocalChannel | None = None
 
     for name in channel_names:
-        if name == "local":
-            local_channel = LocalChannel(bus=bus, writer=local_writer)
-            manager.register(local_channel)
+        spec = get_channel_spec(name)
+        if spec is None:
             continue
 
-        if name == "feishu":
-            manager.register(
-                FeishuChannel(
-                    bus=bus,
-                    app_id=os.getenv("FEISHU_APP_ID", "").strip(),
-                    app_secret=os.getenv("FEISHU_APP_SECRET", "").strip(),
-                    encrypt_key=os.getenv("FEISHU_ENCRYPT_KEY", "").strip(),
-                    verification_token=os.getenv("FEISHU_VERIFICATION_TOKEN", "").strip(),
-                )
-            )
+        channel = spec.build(bus, local_writer)
+        if channel is None:
             continue
+        manager.register(channel)
+        if isinstance(channel, LocalChannel):
+            local_channel = channel
 
     return manager, local_channel
