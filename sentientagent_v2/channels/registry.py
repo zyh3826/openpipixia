@@ -14,6 +14,7 @@ from typing import Callable
 
 from ..bus.queue import MessageBus
 from .base import BaseChannel
+from .email import EmailChannel
 from .feishu import FEISHU_AVAILABLE, FeishuChannel
 from .local import LocalChannel
 from .telegram import TelegramChannel
@@ -80,6 +81,58 @@ def _validate_telegram() -> list[str]:
     return ["Missing TELEGRAM_BOT_TOKEN for telegram channel."]
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name, "1" if default else "0").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name, str(default)).strip()
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _build_email(bus: MessageBus, _local_writer: LocalWriter) -> BaseChannel:
+    allow_from = [item.strip() for item in os.getenv("EMAIL_ALLOW_FROM", "").split(",") if item.strip()]
+    return EmailChannel(
+        bus=bus,
+        consent_granted=_env_flag("EMAIL_CONSENT_GRANTED", default=False),
+        auto_reply_enabled=_env_flag("EMAIL_AUTO_REPLY_ENABLED", default=True),
+        imap_host=os.getenv("EMAIL_IMAP_HOST", "").strip(),
+        imap_port=_env_int("EMAIL_IMAP_PORT", 993),
+        imap_username=os.getenv("EMAIL_IMAP_USERNAME", "").strip(),
+        imap_password=os.getenv("EMAIL_IMAP_PASSWORD", ""),
+        imap_mailbox=os.getenv("EMAIL_IMAP_MAILBOX", "INBOX").strip() or "INBOX",
+        imap_use_ssl=_env_flag("EMAIL_IMAP_USE_SSL", default=True),
+        smtp_host=os.getenv("EMAIL_SMTP_HOST", "").strip(),
+        smtp_port=_env_int("EMAIL_SMTP_PORT", 587),
+        smtp_username=os.getenv("EMAIL_SMTP_USERNAME", "").strip(),
+        smtp_password=os.getenv("EMAIL_SMTP_PASSWORD", ""),
+        smtp_use_tls=_env_flag("EMAIL_SMTP_USE_TLS", default=True),
+        smtp_use_ssl=_env_flag("EMAIL_SMTP_USE_SSL", default=False),
+        from_address=os.getenv("EMAIL_FROM_ADDRESS", "").strip(),
+        poll_interval_seconds=_env_int("EMAIL_POLL_INTERVAL_SECONDS", 30),
+        mark_seen=_env_flag("EMAIL_MARK_SEEN", default=True),
+        max_body_chars=_env_int("EMAIL_MAX_BODY_CHARS", 12000),
+        allow_from=allow_from,
+    )
+
+
+def _validate_email() -> list[str]:
+    issues: list[str] = []
+    if not _env_flag("EMAIL_CONSENT_GRANTED", default=False):
+        issues.append("Missing EMAIL_CONSENT_GRANTED=1 for email channel.")
+    if not os.getenv("EMAIL_SMTP_HOST", "").strip():
+        issues.append("Missing EMAIL_SMTP_HOST for email channel.")
+    if not os.getenv("EMAIL_SMTP_USERNAME", "").strip():
+        issues.append("Missing EMAIL_SMTP_USERNAME for email channel.")
+    if not os.getenv("EMAIL_SMTP_PASSWORD", ""):
+        issues.append("Missing EMAIL_SMTP_PASSWORD for email channel.")
+    return issues
+
+
 def _build_not_implemented(_bus: MessageBus, _local_writer: LocalWriter) -> None:
     # Channel is known by configuration but has no runtime adapter yet.
     return None
@@ -122,6 +175,11 @@ def _make_registry() -> dict[str, ChannelSpec]:
             name="telegram",
             build=_build_telegram,
             validate_setup=_validate_telegram,
+        ),
+        "email": ChannelSpec(
+            name="email",
+            build=_build_email,
+            validate_setup=_validate_email,
         ),
     }
 

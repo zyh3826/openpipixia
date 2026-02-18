@@ -38,6 +38,12 @@ class ChannelFactoryTests(unittest.TestCase):
         self.assertTrue(any("Missing TELEGRAM_BOT_TOKEN" in item for item in issues))
         self.assertFalse(any("Unsupported channels" in item for item in issues))
 
+    def test_validate_reports_email_setup_issues(self) -> None:
+        issues = validate_channel_setup(["email"])
+        self.assertTrue(any("EMAIL_CONSENT_GRANTED" in item for item in issues))
+        self.assertTrue(any("EMAIL_SMTP_HOST" in item for item in issues))
+        self.assertFalse(any("Unsupported channels" in item for item in issues))
+
     def test_build_local_channel_manager(self) -> None:
         manager, local_channel = build_channel_manager(bus=MessageBus(), channel_names=["local"])
         self.assertIsNotNone(local_channel)
@@ -49,6 +55,14 @@ class ChannelFactoryTests(unittest.TestCase):
         self.assertIsNotNone(local_channel)
         self.assertIn("local", manager.channels)
         self.assertIn("telegram", manager.channels)
+
+    def test_build_manager_registers_email_when_configured(self) -> None:
+        os.environ["EMAIL_CONSENT_GRANTED"] = "1"
+        os.environ["EMAIL_SMTP_HOST"] = "smtp.example.com"
+        os.environ["EMAIL_SMTP_USERNAME"] = "bot@example.com"
+        os.environ["EMAIL_SMTP_PASSWORD"] = "pw"
+        manager, _ = build_channel_manager(bus=MessageBus(), channel_names=["email"])
+        self.assertIn("email", manager.channels)
 
 
 if __name__ == "__main__":

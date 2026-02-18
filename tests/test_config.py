@@ -90,6 +90,13 @@ class ConfigTests(unittest.TestCase):
             cfg["channels"]["telegram"]["token"] = "tg-token"
             cfg["channels"]["telegram"]["allowFrom"] = ["u1", "u2"]
             cfg["channels"]["telegram"]["proxy"] = "http://127.0.0.1:7890"
+            cfg["channels"]["email"]["enabled"] = True
+            cfg["channels"]["email"]["consentGranted"] = True
+            cfg["channels"]["email"]["smtpHost"] = "smtp.example.com"
+            cfg["channels"]["email"]["smtpUsername"] = "bot@example.com"
+            cfg["channels"]["email"]["smtpPassword"] = "pw"
+            cfg["channels"]["email"]["fromAddress"] = "bot@example.com"
+            cfg["channels"]["email"]["allowFrom"] = ["a@example.com", "b@example.com"]
             cfg["session"]["dbUrl"] = "sqlite+aiosqlite:////tmp/sessions.db"
             cfg["providers"]["google"]["apiKey"] = "google-key"
             cfg["web"]["search"]["enabled"] = False
@@ -105,6 +112,12 @@ class ConfigTests(unittest.TestCase):
             os.environ.pop("TELEGRAM_BOT_TOKEN", None)
             os.environ.pop("TELEGRAM_ALLOW_FROM", None)
             os.environ.pop("TELEGRAM_PROXY", None)
+            os.environ.pop("EMAIL_CONSENT_GRANTED", None)
+            os.environ.pop("EMAIL_SMTP_HOST", None)
+            os.environ.pop("EMAIL_SMTP_USERNAME", None)
+            os.environ.pop("EMAIL_SMTP_PASSWORD", None)
+            os.environ.pop("EMAIL_FROM_ADDRESS", None)
+            os.environ.pop("EMAIL_ALLOW_FROM", None)
             os.environ.pop("SENTIENTAGENT_V2_SESSION_DB_URL", None)
             os.environ.pop("GOOGLE_API_KEY", None)
             os.environ.pop("BRAVE_API_KEY", None)
@@ -116,12 +129,18 @@ class ConfigTests(unittest.TestCase):
             loaded = bootstrap_env_from_config(path)
 
         self.assertIsNotNone(loaded)
-        self.assertEqual(os.environ["SENTIENTAGENT_V2_CHANNELS"], "feishu,telegram")
+        self.assertEqual(os.environ["SENTIENTAGENT_V2_CHANNELS"], "feishu,telegram,email")
         self.assertEqual(os.environ["FEISHU_APP_ID"], "app-id")
         self.assertEqual(os.environ["FEISHU_ALLOW_FROM"], "ou_1,ou_2")
         self.assertEqual(os.environ["TELEGRAM_BOT_TOKEN"], "tg-token")
         self.assertEqual(os.environ["TELEGRAM_ALLOW_FROM"], "u1,u2")
         self.assertEqual(os.environ["TELEGRAM_PROXY"], "http://127.0.0.1:7890")
+        self.assertEqual(os.environ["EMAIL_CONSENT_GRANTED"], "1")
+        self.assertEqual(os.environ["EMAIL_SMTP_HOST"], "smtp.example.com")
+        self.assertEqual(os.environ["EMAIL_SMTP_USERNAME"], "bot@example.com")
+        self.assertEqual(os.environ["EMAIL_SMTP_PASSWORD"], "pw")
+        self.assertEqual(os.environ["EMAIL_FROM_ADDRESS"], "bot@example.com")
+        self.assertEqual(os.environ["EMAIL_ALLOW_FROM"], "a@example.com,b@example.com")
         self.assertEqual(os.environ["SENTIENTAGENT_V2_SESSION_DB_URL"], "sqlite+aiosqlite:////tmp/sessions.db")
         self.assertEqual(os.environ["GOOGLE_API_KEY"], "google-key")
         self.assertEqual(os.environ["SENTIENTAGENT_V2_WEB_SEARCH_ENABLED"], "0")

@@ -352,6 +352,12 @@ def config_to_env(config: dict[str, Any]) -> dict[str, str]:
     telegram_allow_from = telegram.get("allowFrom", [])
     if not isinstance(telegram_allow_from, list):
         telegram_allow_from = []
+    email = channels.get("email", {}) if isinstance(channels, dict) else {}
+    if not isinstance(email, dict):
+        email = {}
+    email_allow_from = email.get("allowFrom", [])
+    if not isinstance(email_allow_from, list):
+        email_allow_from = []
     provider_name, provider_enabled, model, provider_api_key = _resolve_provider(cfg)
     web_enabled, web_search_enabled, web_search_provider, web_search_max_results, web_search_api_key = _resolve_web(
         cfg
@@ -380,6 +386,25 @@ def config_to_env(config: dict[str, Any]) -> dict[str, str]:
         "TELEGRAM_BOT_TOKEN": str(telegram.get("token", "")).strip(),
         "TELEGRAM_ALLOW_FROM": ",".join(normalize_allowlist(telegram_allow_from)),
         "TELEGRAM_PROXY": str(telegram.get("proxy", "")).strip(),
+        "EMAIL_CONSENT_GRANTED": "1" if is_enabled(email.get("consentGranted"), default=False) else "0",
+        "EMAIL_IMAP_HOST": str(email.get("imapHost", "")).strip(),
+        "EMAIL_IMAP_PORT": str(email.get("imapPort", 993)),
+        "EMAIL_IMAP_USERNAME": str(email.get("imapUsername", "")).strip(),
+        "EMAIL_IMAP_PASSWORD": str(email.get("imapPassword", "")),
+        "EMAIL_IMAP_MAILBOX": str(email.get("imapMailbox", "INBOX")).strip() or "INBOX",
+        "EMAIL_IMAP_USE_SSL": "1" if is_enabled(email.get("imapUseSsl"), default=True) else "0",
+        "EMAIL_SMTP_HOST": str(email.get("smtpHost", "")).strip(),
+        "EMAIL_SMTP_PORT": str(email.get("smtpPort", 587)),
+        "EMAIL_SMTP_USERNAME": str(email.get("smtpUsername", "")).strip(),
+        "EMAIL_SMTP_PASSWORD": str(email.get("smtpPassword", "")),
+        "EMAIL_SMTP_USE_TLS": "1" if is_enabled(email.get("smtpUseTls"), default=True) else "0",
+        "EMAIL_SMTP_USE_SSL": "1" if is_enabled(email.get("smtpUseSsl"), default=False) else "0",
+        "EMAIL_FROM_ADDRESS": str(email.get("fromAddress", "")).strip(),
+        "EMAIL_AUTO_REPLY_ENABLED": "1" if is_enabled(email.get("autoReplyEnabled"), default=True) else "0",
+        "EMAIL_POLL_INTERVAL_SECONDS": str(email.get("pollIntervalSeconds", 30)),
+        "EMAIL_MARK_SEEN": "1" if is_enabled(email.get("markSeen"), default=True) else "0",
+        "EMAIL_MAX_BODY_CHARS": str(email.get("maxBodyChars", 12000)),
+        "EMAIL_ALLOW_FROM": ",".join(normalize_allowlist(email_allow_from)),
         "BRAVE_API_KEY": web_search_api_key,
         "SENTIENTAGENT_V2_WEB_ENABLED": "1" if web_enabled else "0",
         "SENTIENTAGENT_V2_WEB_SEARCH_ENABLED": "1" if web_search_enabled else "0",
