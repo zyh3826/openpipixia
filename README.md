@@ -323,9 +323,13 @@ Per-server fields:
 Quick verify:
 
 1. Add one server under `tools.mcpServers` in `~/.sentientagent_v2/config.json`.
-2. Run `sentientagent_v2 doctor` to ensure config is loaded.
-3. Start gateway: `sentientagent_v2 gateway`.
+2. Run `sentientagent_v2 doctor` to run MCP health checks (list tools per configured server).
+3. Start gateway: `sentientagent_v2 gateway` (startup logs print MCP server summary).
 4. Ask the agent to use MCP tools by prefix (for example `mcp_filesystem_...`).
+
+Optional:
+
+- `SENTIENTAGENT_V2_MCP_DOCTOR_TIMEOUT_SECONDS` controls per-server MCP health-check timeout (default `5`, range `1..30`).
 
 ## Security Policy
 

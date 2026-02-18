@@ -24,6 +24,7 @@ from .config import (
     save_config,
 )
 from .env_utils import env_enabled
+from .mcp_registry import build_mcp_toolsets_from_env, probe_mcp_toolsets, summarize_mcp_toolsets
 from .provider import normalize_model_name, normalize_provider_name, provider_api_key_env, validate_provider_runtime
 from .runtime.adk_utils import extract_text, merge_text_stream
 from .runtime.cron_service import CronService
@@ -87,6 +88,31 @@ def _cmd_doctor() -> int:
     web_search_provider = os.getenv("SENTIENTAGENT_V2_WEB_SEARCH_PROVIDER", "brave").strip().lower() or "brave"
     web_search_key_configured = bool(os.getenv("BRAVE_API_KEY", "").strip())
     security_policy = load_security_policy()
+    mcp_toolsets = build_mcp_toolsets_from_env(log_registered=False)
+    mcp_summaries = summarize_mcp_toolsets(mcp_toolsets)
+    mcp_timeout_raw = os.getenv("SENTIENTAGENT_V2_MCP_DOCTOR_TIMEOUT_SECONDS", "5").strip()
+    try:
+        mcp_timeout_seconds = min(max(float(mcp_timeout_raw), 1.0), 30.0)
+    except Exception:
+        mcp_timeout_seconds = 5.0
+    mcp_probe_results: list[dict[str, object]] = []
+    if mcp_toolsets:
+        try:
+            mcp_probe_results = asyncio.run(
+                probe_mcp_toolsets(
+                    mcp_toolsets,
+                    timeout_seconds=mcp_timeout_seconds,
+                )
+            )
+        except Exception as exc:
+            issues.append(f"MCP diagnostics failed: {exc}")
+    for result in mcp_probe_results:
+        if str(result.get("status")) != "ok":
+            name = str(result.get("name", "unknown"))
+            status = str(result.get("status", "error"))
+            error = str(result.get("error", "")).strip()
+            details = f"{status}: {error}" if error else status
+            issues.append(f"MCP server '{name}' health check failed ({details})")
 
     logger.debug(f"Config file: {config_path}" + (" (found)" if config_path.exists() else " (not found)"))
     logger.debug(f"Workspace: {registry.workspace}")
@@ -107,6 +133,26 @@ def _cmd_doctor() -> int:
         f"allow_network={security_policy.allow_network}, "
         f"exec_allowlist={list(security_policy.exec_allowlist)}"
     )
+    if not mcp_summaries:
+        logger.debug("MCP: no servers configured")
+    else:
+        logger.debug(f"MCP: configured servers={len(mcp_summaries)}")
+        for item in mcp_summaries:
+            logger.debug(
+                "MCP: "
+                f"name={item.get('name')}, "
+                f"transport={item.get('transport')}, "
+                f"prefix={item.get('prefix')}"
+            )
+        for result in mcp_probe_results:
+            logger.debug(
+                "MCP health: "
+                f"name={result.get('name')}, "
+                f"status={result.get('status')}, "
+                f"tools={result.get('tool_count')}, "
+                f"elapsed_ms={result.get('elapsed_ms')}, "
+                f"error={result.get('error')}"
+            )
 
     if issues:
         logger.info("Issues:")
@@ -186,6 +232,7 @@ def _cmd_gateway(
             channel_names=names,
             local_writer=logger.info,
         )
+        _log_mcp_startup_summary(list(getattr(root_agent, "tools", [])))
         gateway = Gateway(
             agent=root_agent,
             app_name=root_agent.name,
@@ -222,6 +269,20 @@ def _cmd_gateway(
     except Exception as exc:
         logger.info(f"Error running gateway: {exc}")
         return 1
+
+
+def _log_mcp_startup_summary(agent_tools: list[object]) -> None:
+    """Print a compact MCP summary at gateway startup."""
+    summaries = summarize_mcp_toolsets(agent_tools)
+    if not summaries:
+        logger.info("MCP toolsets: none configured")
+        return
+    logger.info(f"MCP toolsets: {len(summaries)} server(s) configured")
+    for item in summaries:
+        logger.info(
+            "MCP server "
+            f"{item.get('name')}: transport={item.get('transport')}, prefix={item.get('prefix')}"
+        )
 
 
 def _cmd_message(message: str, user_id: str, session_id: str) -> int:

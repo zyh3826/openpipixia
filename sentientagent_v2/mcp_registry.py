@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
+import time
 from typing import Any
 
 from google.adk.tools.mcp_tool import McpToolset
@@ -65,7 +67,66 @@ def _pick(raw: dict[str, Any], snake: str, camel: str, default: Any = None) -> A
     return default
 
 
-def build_mcp_toolsets(mcp_servers: dict[str, Any]) -> list[SafeMcpToolset]:
+def _toolset_meta(toolset: SafeMcpToolset) -> dict[str, str]:
+    """Extract stable metadata injected on toolset creation."""
+    return {
+        "name": str(getattr(toolset, "_sentientagent_server_name", "unknown")),
+        "transport": str(getattr(toolset, "_sentientagent_transport", "unknown")),
+        "prefix": str(getattr(toolset, "tool_name_prefix", "") or ""),
+    }
+
+
+def summarize_mcp_toolsets(toolsets: list[Any]) -> list[dict[str, str]]:
+    """Build a compact summary for MCP toolsets currently attached to the agent."""
+    summaries: list[dict[str, str]] = []
+    for tool in toolsets:
+        if isinstance(tool, SafeMcpToolset):
+            summaries.append(_toolset_meta(tool))
+    return summaries
+
+
+async def probe_mcp_toolsets(
+    toolsets: list[SafeMcpToolset],
+    *,
+    timeout_seconds: float = 5.0,
+) -> list[dict[str, Any]]:
+    """Probe MCP servers by listing tools, returning per-server health results.
+
+    This call uses strict `McpToolset.get_tools` to surface connection errors.
+    """
+    timeout = min(max(float(timeout_seconds), 1.0), 30.0)
+    results: list[dict[str, Any]] = []
+    for toolset in toolsets:
+        meta = _toolset_meta(toolset)
+        started = time.perf_counter()
+        status = "ok"
+        error = ""
+        tool_count = 0
+        try:
+            tools = await asyncio.wait_for(McpToolset.get_tools(toolset), timeout=timeout)
+            tool_count = len(tools)
+        except asyncio.TimeoutError:
+            status = "timeout"
+            error = f"timed out after {timeout:.1f}s"
+        except Exception as exc:
+            status = "error"
+            error = str(exc)
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        results.append(
+            {
+                "name": meta["name"],
+                "transport": meta["transport"],
+                "prefix": meta["prefix"],
+                "status": status,
+                "tool_count": tool_count,
+                "elapsed_ms": elapsed_ms,
+                "error": error,
+            }
+        )
+    return results
+
+
+def build_mcp_toolsets(mcp_servers: dict[str, Any], *, log_registered: bool = True) -> list[SafeMcpToolset]:
     """Build configured MCP toolsets.
 
     Supported per-server config keys:
@@ -87,6 +148,7 @@ def build_mcp_toolsets(mcp_servers: dict[str, Any]) -> list[SafeMcpToolset]:
         env = _string_dict(raw_cfg.get("env", {}))
         headers = _string_dict(raw_cfg.get("headers", {})) or None
         transport = str(raw_cfg.get("transport", "") or "").strip().lower()
+        transport_name = "stdio"
 
         if command:
             connection_params: Any = StdioConnectionParams(
@@ -98,8 +160,10 @@ def build_mcp_toolsets(mcp_servers: dict[str, Any]) -> list[SafeMcpToolset]:
             )
         elif url:
             if transport == "sse" or url.lower().rstrip("/").endswith("/sse"):
+                transport_name = "sse"
                 connection_params = SseConnectionParams(url=url, headers=headers)
             else:
+                transport_name = "http"
                 connection_params = StreamableHTTPConnectionParams(url=url, headers=headers)
         else:
             logger.warning("MCP server '{}' has neither command nor url; skipping", server_name)
@@ -118,13 +182,16 @@ def build_mcp_toolsets(mcp_servers: dict[str, Any]) -> list[SafeMcpToolset]:
             tool_name_prefix=prefix,
             require_confirmation=require_confirmation,
         )
+        # Attach metadata for startup summaries and health diagnostics.
+        toolset._sentientagent_server_name = str(server_name)  # type: ignore[attr-defined]
+        toolset._sentientagent_transport = transport_name  # type: ignore[attr-defined]
         toolsets.append(toolset)
-        logger.info("MCP server '{}' registered (prefix='{}')", server_name, prefix)
+        if log_registered:
+            logger.info("MCP server '{}' registered (prefix='{}')", server_name, prefix)
 
     return toolsets
 
 
-def build_mcp_toolsets_from_env() -> list[SafeMcpToolset]:
+def build_mcp_toolsets_from_env(*, log_registered: bool = True) -> list[SafeMcpToolset]:
     """Build MCP toolsets from `SENTIENTAGENT_V2_MCP_SERVERS_JSON`."""
-    return build_mcp_toolsets(_load_servers_from_env())
-
+    return build_mcp_toolsets(_load_servers_from_env(), log_registered=log_registered)
