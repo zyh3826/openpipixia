@@ -9,7 +9,6 @@ import os
 import re
 import shlex
 import subprocess
-import sys
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 from urllib.error import HTTPError, URLError
@@ -19,6 +18,7 @@ from zoneinfo import ZoneInfo
 
 from .bus.events import OutboundMessage
 from .env_utils import env_enabled
+from .logging_utils import emit_debug
 from .runtime.cron_service import CronSchedule, CronService
 from .runtime.tool_context import get_route
 from .security import PathGuard, SecurityPolicy, load_security_policy
@@ -759,11 +759,7 @@ def _debug_enabled() -> bool:
 def _debug(tag: str, payload: object) -> None:
     if not _debug_enabled():
         return
-    try:
-        body = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False, default=str)
-    except Exception:
-        body = str(payload)
-    print(f"[DEBUG] {tag}: {body}", file=sys.stderr)
+    emit_debug(tag, payload)
 
 
 def _ret(tag: str, value: str) -> str:

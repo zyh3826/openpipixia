@@ -9,7 +9,6 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 import uuid
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -25,6 +24,7 @@ from .config import (
     save_config,
 )
 from .env_utils import env_enabled
+from .logging_utils import emit_debug
 from .provider import normalize_model_name, normalize_provider_name, provider_api_key_env, validate_provider_runtime
 from .runtime.adk_utils import extract_text, merge_text_stream
 from .runtime.cron_service import CronSchedule, CronService
@@ -544,11 +544,7 @@ def _debug_enabled() -> bool:
 def _debug(tag: str, payload: object) -> None:
     if not _debug_enabled():
         return
-    try:
-        body = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False, default=str)
-    except Exception:
-        body = str(payload)
-    print(f"[DEBUG] {tag}: {body}", file=sys.stderr)
+    emit_debug(tag, payload)
 
 
 def _debug_event(event: object) -> None:

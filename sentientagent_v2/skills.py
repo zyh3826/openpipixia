@@ -5,11 +5,11 @@ from __future__ import annotations
 import json
 import os
 import re
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
 from .env_utils import env_enabled
+from .logging_utils import emit_debug
 
 
 @dataclass(frozen=True)
@@ -168,8 +168,4 @@ def _debug_enabled() -> bool:
 
 
 def _debug(tag: str, payload: object) -> None:
-    try:
-        body = payload if isinstance(payload, str) else json.dumps(payload, ensure_ascii=False, default=str)
-    except Exception:
-        body = str(payload)
-    print(f"[DEBUG] {tag}: {body}", file=sys.stderr)
+    emit_debug(tag, payload)

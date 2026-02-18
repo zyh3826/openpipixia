@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
-import sys
 import uuid
 from hashlib import sha1
 from typing import Any
@@ -15,6 +13,7 @@ from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 
 from ..env_utils import env_enabled
+from ..logging_utils import emit_debug
 
 _DEFAULT_MAX_TEXT_CHARS = 2000
 _MAX_TOOL_CALL_ID_CHARS = 40
@@ -190,8 +189,7 @@ def _response_text(llm_response: LlmResponse) -> str:
 
 
 def _write_debug(tag: str, payload: dict[str, Any]) -> None:
-    body = json.dumps(payload, ensure_ascii=False, default=str)
-    print(f"[DEBUG] {tag}: {body}", file=sys.stderr)
+    emit_debug(tag, payload)
 
 
 def before_model_debug_callback(callback_context: CallbackContext, llm_request: LlmRequest) -> LlmResponse | None:
