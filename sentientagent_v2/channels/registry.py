@@ -41,12 +41,14 @@ def _validate_local() -> list[str]:
 
 
 def _build_feishu(bus: MessageBus, _local_writer: LocalWriter) -> BaseChannel:
+    allow_from = [item.strip() for item in os.getenv("FEISHU_ALLOW_FROM", "").split(",") if item.strip()]
     return FeishuChannel(
         bus=bus,
         app_id=os.getenv("FEISHU_APP_ID", "").strip(),
         app_secret=os.getenv("FEISHU_APP_SECRET", "").strip(),
         encrypt_key=os.getenv("FEISHU_ENCRYPT_KEY", "").strip(),
         verification_token=os.getenv("FEISHU_VERIFICATION_TOKEN", "").strip(),
+        allow_from=allow_from,
     )
 
 

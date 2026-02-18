@@ -150,8 +150,9 @@ class FeishuChannel(BaseChannel):
         app_secret: str,
         encrypt_key: str = "",
         verification_token: str = "",
+        allow_from: list[str] | None = None,
     ) -> None:
-        super().__init__(bus)
+        super().__init__(bus, allow_from=allow_from)
         self.app_id = app_id
         self.app_secret = app_secret
         self.encrypt_key = encrypt_key
@@ -464,12 +465,13 @@ class FeishuChannel(BaseChannel):
             if sender_type == "bot":
                 return
 
+            sender_id = getattr(getattr(sender, "sender_id", None), "open_id", "") or "unknown"
+            if not self.is_allowed(sender_id):
+                return
             message_id = getattr(message, "message_id", "")
             if message_id:
                 # Mirror nanobot behavior: acknowledge user messages with a thumbs-up reaction.
                 await self._add_reaction(message_id, "THUMBSUP")
-
-            sender_id = getattr(getattr(sender, "sender_id", None), "open_id", "") or "unknown"
             chat_id = getattr(message, "chat_id", "")
             chat_type = getattr(message, "chat_type", "")
             msg_type = getattr(message, "message_type", "")
@@ -479,6 +481,7 @@ class FeishuChannel(BaseChannel):
                 "chat_type": chat_type,
                 "message_id": message_id,
             }
+            media_paths: list[str] = []
 
             if msg_type == "text":
                 try:
@@ -518,6 +521,7 @@ class FeishuChannel(BaseChannel):
                             image_errors.append(f"{image_key}: {exc}")
                 if image_paths:
                     metadata["image_paths"] = image_paths
+                    media_paths.extend(image_paths)
                 if image_errors:
                     metadata["image_download_errors"] = image_errors
                 parts: list[str] = []
@@ -547,6 +551,7 @@ class FeishuChannel(BaseChannel):
                             message_id,
                         )
                         metadata["local_path"] = str(local_path)
+                        media_paths.append(str(local_path))
                         content = f"Received image: {local_path}"
                     except Exception as exc:
                         logger.exception(
@@ -581,6 +586,7 @@ class FeishuChannel(BaseChannel):
                             message_id,
                         )
                         metadata["local_path"] = str(local_path)
+                        media_paths.append(str(local_path))
                         content = f"Received file: {local_path}"
                     except Exception as exc:
                         logger.exception(
@@ -606,6 +612,7 @@ class FeishuChannel(BaseChannel):
                 sender_id=sender_id,
                 chat_id=target_chat_id,
                 content=content,
+                media=media_paths if media_paths else None,
                 metadata=metadata,
             )
         except Exception:

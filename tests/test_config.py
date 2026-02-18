@@ -85,6 +85,7 @@ class ConfigTests(unittest.TestCase):
             cfg["channels"]["feishu"]["enabled"] = True
             cfg["channels"]["feishu"]["appId"] = "app-id"
             cfg["channels"]["feishu"]["appSecret"] = "app-secret"
+            cfg["channels"]["feishu"]["allowFrom"] = ["ou_1", "ou_2"]
             cfg["session"]["dbUrl"] = "sqlite+aiosqlite:////tmp/sessions.db"
             cfg["providers"]["google"]["apiKey"] = "google-key"
             cfg["web"]["search"]["enabled"] = False
@@ -96,6 +97,7 @@ class ConfigTests(unittest.TestCase):
 
             os.environ.pop("SENTIENTAGENT_V2_CHANNELS", None)
             os.environ.pop("FEISHU_APP_ID", None)
+            os.environ.pop("FEISHU_ALLOW_FROM", None)
             os.environ.pop("SENTIENTAGENT_V2_SESSION_DB_URL", None)
             os.environ.pop("GOOGLE_API_KEY", None)
             os.environ.pop("BRAVE_API_KEY", None)
@@ -109,6 +111,7 @@ class ConfigTests(unittest.TestCase):
         self.assertIsNotNone(loaded)
         self.assertEqual(os.environ["SENTIENTAGENT_V2_CHANNELS"], "feishu")
         self.assertEqual(os.environ["FEISHU_APP_ID"], "app-id")
+        self.assertEqual(os.environ["FEISHU_ALLOW_FROM"], "ou_1,ou_2")
         self.assertEqual(os.environ["SENTIENTAGENT_V2_SESSION_DB_URL"], "sqlite+aiosqlite:////tmp/sessions.db")
         self.assertEqual(os.environ["GOOGLE_API_KEY"], "google-key")
         self.assertEqual(os.environ["SENTIENTAGENT_V2_WEB_SEARCH_ENABLED"], "0")

@@ -69,6 +69,37 @@ class FeishuChannelTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(asyncio.TimeoutError):
             await asyncio.wait_for(bus.consume_inbound(), timeout=0.05)
 
+    async def test_on_message_respects_allow_from(self) -> None:
+        bus = MessageBus()
+        channel = FeishuChannel(
+            bus=bus,
+            app_id="app-id",
+            app_secret="app-secret",
+            allow_from=["ou_allowed"],
+        )
+        data = pytypes.SimpleNamespace(
+            event=pytypes.SimpleNamespace(
+                message=pytypes.SimpleNamespace(
+                    message_id="om_blocked_1",
+                    chat_id="oc_group_2",
+                    chat_type="group",
+                    message_type="text",
+                    content='{"text":"should be blocked"}',
+                ),
+                sender=pytypes.SimpleNamespace(
+                    sender_type="user",
+                    sender_id=pytypes.SimpleNamespace(open_id="ou_denied"),
+                ),
+            )
+        )
+
+        with patch.object(channel, "_add_reaction", new=AsyncMock()) as add_reaction:
+            await channel._on_message(data)
+            add_reaction.assert_not_awaited()
+
+        with self.assertRaises(asyncio.TimeoutError):
+            await asyncio.wait_for(bus.consume_inbound(), timeout=0.05)
+
     async def test_on_message_downloads_file_and_forwards_workspace_path(self) -> None:
         bus = MessageBus()
         channel = FeishuChannel(bus=bus, app_id="app-id", app_secret="app-secret")

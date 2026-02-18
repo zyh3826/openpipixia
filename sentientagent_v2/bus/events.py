@@ -16,6 +16,7 @@ class InboundMessage:
     chat_id: str
     content: str
     timestamp: datetime = field(default_factory=datetime.now)
+    media: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
     @property

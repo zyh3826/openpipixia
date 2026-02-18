@@ -21,7 +21,13 @@ from sentientagent_v2.tools import SubagentSpawnRequest
 class MessageBusTests(unittest.IsolatedAsyncioTestCase):
     async def test_roundtrip(self) -> None:
         bus = MessageBus()
-        inbound = InboundMessage(channel="local", sender_id="u1", chat_id="c1", content="ping")
+        inbound = InboundMessage(
+            channel="local",
+            sender_id="u1",
+            chat_id="c1",
+            content="ping",
+            media=["/tmp/demo.png"],
+        )
         outbound = OutboundMessage(channel="local", chat_id="c1", content="pong")
 
         await bus.publish_inbound(inbound)
@@ -31,6 +37,7 @@ class MessageBusTests(unittest.IsolatedAsyncioTestCase):
         got_outbound = await bus.consume_outbound()
 
         self.assertEqual(got_inbound.content, "ping")
+        self.assertEqual(got_inbound.media, ["/tmp/demo.png"])
         self.assertEqual(got_outbound.content, "pong")
 
 
