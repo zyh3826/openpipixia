@@ -1,0 +1,13 @@
+# sentientagent_v2 Docs
+
+## 文档索引
+
+- [PROJECT_OVERVIEW.md](./PROJECT_OVERVIEW.md): 项目总体说明（架构、Session/Memory、Compaction、工具能力）
+- [OPERATIONS.md](./OPERATIONS.md): 运行方式、网关模式、WhatsApp Bridge、Cron、测试
+- [CONFIGURATION.md](./CONFIGURATION.md): 配置模型、环境变量、配置样例、平台说明
+- [MCP_SECURITY.md](./MCP_SECURITY.md): MCP 接入和安全策略
+
+## 维护建议
+
+- 新增功能时，优先补充 `PROJECT_OVERVIEW.md` 的对应章节
+- 当单一主题内容变长时，再拆分为专项文档（如 `MEMORY.md`、`MCP_INTEGRATION.md`）
