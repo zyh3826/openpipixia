@@ -19,6 +19,18 @@ from .polling_utils import cancel_background_task, dedupe_stripped, run_poll_loo
 logger = logging.getLogger(__name__)
 
 
+def _parse_api_json(raw: str, *, path: str) -> dict[str, Any]:
+    """Decode one Mochat API response body into a JSON object."""
+    try:
+        parsed = json.loads(raw) if raw else {}
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Mochat API invalid JSON ({path}): {exc}") from exc
+
+    if not isinstance(parsed, dict):
+        return {}
+    return parsed
+
+
 @dataclass(frozen=True, slots=True)
 class MochatTarget:
     """Resolved Mochat outbound target."""
@@ -142,16 +154,11 @@ class MochatChannel(BaseChannel):
         try:
             with urlopen(req, timeout=30) as response:
                 raw = response.read().decode("utf-8")
-            parsed = json.loads(raw) if raw else {}
         except HTTPError as exc:
             raise RuntimeError(f"Mochat API HTTP error ({path}): {exc.code}") from exc
         except URLError as exc:
             raise RuntimeError(f"Mochat API network error ({path}): {exc.reason}") from exc
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(f"Mochat API invalid JSON ({path}): {exc}") from exc
-
-        if not isinstance(parsed, dict):
-            return {}
+        parsed = _parse_api_json(raw, path=path)
         if isinstance(parsed.get("code"), int):
             code = int(parsed.get("code", 0))
             if code != 200:
