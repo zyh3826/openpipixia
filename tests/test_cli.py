@@ -100,6 +100,28 @@ class CLITests(unittest.TestCase):
                 mocked_bootstrap.assert_called_once()
                 mocked_status.assert_called_once_with(output_json=True)
 
+    def test_channels_login_mode_dispatch(self) -> None:
+        from sentientagent_v2 import cli
+
+        with patch.object(cli, "bootstrap_env_from_config") as mocked_bootstrap:
+            with patch.object(cli, "_cmd_channels_login", return_value=0) as mocked_login:
+                with self.assertRaises(SystemExit) as ctx:
+                    cli.main(["channels", "login"])
+                self.assertEqual(ctx.exception.code, 0)
+                mocked_bootstrap.assert_called_once()
+                mocked_login.assert_called_once_with(channel_name="whatsapp")
+
+    def test_channels_bridge_start_mode_dispatch(self) -> None:
+        from sentientagent_v2 import cli
+
+        with patch.object(cli, "bootstrap_env_from_config") as mocked_bootstrap:
+            with patch.object(cli, "_cmd_channels_bridge_start", return_value=0) as mocked_start:
+                with self.assertRaises(SystemExit) as ctx:
+                    cli.main(["channels", "bridge", "start"])
+                self.assertEqual(ctx.exception.code, 0)
+                mocked_bootstrap.assert_called_once()
+                mocked_start.assert_called_once_with(channel_name="whatsapp")
+
     def test_cmd_provider_login_rejects_non_oauth_provider(self) -> None:
         from sentientagent_v2 import cli
 
@@ -495,6 +517,45 @@ class CLITests(unittest.TestCase):
         messages = [call.args[0] for call in mocked_info.call_args_list if call.args]
         self.assertIn("[doctor] required MCP failed", messages)
 
+    def test_cmd_gateway_exits_when_whatsapp_bridge_precheck_fails(self) -> None:
+        from sentientagent_v2 import cli
+
+        fake_agent = pytypes.SimpleNamespace(name="sentientagent_v2", tools=[])
+        fake_agent_module = pytypes.SimpleNamespace(root_agent=fake_agent)
+
+        class _UnexpectedGateway:
+            def __init__(self, *args, **kwargs):
+                raise AssertionError("Gateway should not be constructed when WhatsApp bridge precheck fails")
+
+        fake_gateway_module = pytypes.SimpleNamespace(Gateway=_UnexpectedGateway)
+
+        with patch.dict(
+            sys.modules,
+            {
+                "sentientagent_v2.agent": fake_agent_module,
+                "sentientagent_v2.gateway": fake_gateway_module,
+            },
+        ):
+            with patch.object(cli, "parse_enabled_channels", return_value=["whatsapp"]):
+                with patch.object(cli, "validate_channel_setup", return_value=[]):
+                    with patch.object(cli, "_whatsapp_bridge_precheck_enabled", return_value=True):
+                        with patch.object(
+                            cli,
+                            "_check_whatsapp_bridge_ready",
+                            return_value="WhatsApp bridge precheck failed",
+                        ):
+                            with patch.object(cli.logger, "info") as mocked_info:
+                                code = cli._cmd_gateway(
+                                    channels="whatsapp",
+                                    sender_id="u1",
+                                    chat_id="c1",
+                                    interactive_local=False,
+                                )
+
+        self.assertEqual(code, 1)
+        messages = [call.args[0] for call in mocked_info.call_args_list if call.args]
+        self.assertIn("[doctor] WhatsApp bridge precheck failed", messages)
+
     def test_cmd_onboard_creates_config_and_workspace(self) -> None:
         from sentientagent_v2 import cli
 
@@ -723,6 +784,148 @@ class CLITests(unittest.TestCase):
         mocked_print.assert_any_call("Scheduled jobs:")
         mocked_print.assert_any_call("- demo (id: j1, every:30s, enabled, next=-)")
         mocked_info.assert_not_called()
+
+    def test_cmd_doctor_reports_whatsapp_bridge_precheck_issue(self) -> None:
+        from sentientagent_v2 import cli
+
+        fake_registry = pytypes.SimpleNamespace(workspace=Path("/tmp"), list_skills=lambda: [])
+        fake_session_cfg = pytypes.SimpleNamespace(db_url="sqlite+aiosqlite:////tmp/sessions.db")
+        fake_security_policy = pytypes.SimpleNamespace(
+            restrict_to_workspace=False,
+            allow_exec=True,
+            allow_network=True,
+            exec_allowlist=(),
+        )
+        with patch.dict(
+            os.environ,
+            {
+                "SENTIENTAGENT_V2_PROVIDER": "google",
+                "SENTIENTAGENT_V2_PROVIDER_ENABLED": "1",
+                "GOOGLE_API_KEY": "k",
+            },
+            clear=False,
+        ):
+            with patch("sentientagent_v2.cli.shutil.which", return_value="/usr/bin/adk"):
+                with patch.object(cli, "validate_provider_runtime", return_value=None):
+                    with patch.object(cli, "get_registry", return_value=fake_registry):
+                        with patch.object(cli, "load_session_config", return_value=fake_session_cfg):
+                            with patch.object(cli, "parse_enabled_channels", return_value=["whatsapp"]):
+                                with patch.object(cli, "validate_channel_setup", return_value=[]):
+                                    with patch.object(cli, "_whatsapp_bridge_precheck_enabled", return_value=True):
+                                        with patch.object(
+                                            cli,
+                                            "_check_whatsapp_bridge_ready",
+                                            return_value="WhatsApp bridge precheck failed",
+                                        ):
+                                            with patch.object(cli, "load_security_policy", return_value=fake_security_policy):
+                                                with patch.object(cli, "build_mcp_toolsets_from_env", return_value=[]):
+                                                    with patch.object(cli.logger, "debug"):
+                                                        with patch("builtins.print") as mocked_print:
+                                                            code = cli._cmd_doctor(output_json=True, verbose=False)
+
+        self.assertEqual(code, 1)
+        payload = json.loads(mocked_print.call_args.args[0])
+        self.assertIn("WhatsApp bridge precheck failed", payload["issues"])
+
+    def test_cmd_channels_login_rejects_unknown_channel(self) -> None:
+        from sentientagent_v2 import cli
+
+        with patch.object(cli.logger, "info") as mocked_info:
+            code = cli._cmd_channels_login(channel_name="telegram")
+        self.assertEqual(code, 1)
+        self.assertIn("Unsupported channel", mocked_info.call_args[0][0])
+
+    def test_cmd_channels_login_starts_bridge_with_token_from_config(self) -> None:
+        from sentientagent_v2 import cli
+
+        fake_cfg = {
+            "channels": {
+                "whatsapp": {
+                    "bridgeToken": "bridge-token-1",
+                }
+            }
+        }
+        with patch.object(cli, "_get_bridge_dir", return_value=Path("/tmp/sentientagent_v2-bridge")) as mocked_bridge:
+            with patch.object(cli, "load_config", return_value=fake_cfg):
+                with patch("sentientagent_v2.cli.subprocess.run") as mocked_run:
+                    code = cli._cmd_channels_login(channel_name="whatsapp")
+
+        self.assertEqual(code, 0)
+        mocked_bridge.assert_called_once_with()
+        mocked_run.assert_called_once()
+        call_args = mocked_run.call_args
+        self.assertEqual(call_args.args[0], ["npm", "start"])
+        self.assertEqual(call_args.kwargs["cwd"], Path("/tmp/sentientagent_v2-bridge"))
+        self.assertTrue(call_args.kwargs["check"])
+        self.assertEqual(call_args.kwargs["env"]["BRIDGE_TOKEN"], "bridge-token-1")
+
+    def test_cmd_channels_bridge_start_persists_runtime_state(self) -> None:
+        from sentientagent_v2 import cli
+
+        fake_cfg = {
+            "channels": {
+                "whatsapp": {
+                    "bridgeToken": "bridge-token-2",
+                }
+            }
+        }
+        fake_proc = pytypes.SimpleNamespace(pid=54321)
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime_base = Path(tmp) / "bridge-runtime"
+            with patch.object(cli, "_bridge_base_dir", return_value=runtime_base):
+                with patch.object(cli, "_get_bridge_dir", return_value=Path("/tmp/sentientagent_v2-bridge")):
+                    with patch.object(cli, "_is_pid_running", return_value=False):
+                        with patch.object(cli, "load_config", return_value=fake_cfg):
+                            with patch("sentientagent_v2.cli.subprocess.Popen", return_value=fake_proc) as mocked_popen:
+                                code = cli._cmd_channels_bridge_start(channel_name="whatsapp")
+
+            self.assertEqual(code, 0)
+            mocked_popen.assert_called_once()
+            state_path = runtime_base / "runtime_state.json"
+            self.assertTrue(state_path.exists())
+            payload = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload["pid"], 54321)
+
+    def test_cmd_channels_bridge_start_handles_bridge_dir_permission_error(self) -> None:
+        from sentientagent_v2 import cli
+
+        with patch.object(cli, "_get_bridge_dir", side_effect=PermissionError("no permission")):
+            with patch.object(cli.logger, "info") as mocked_info:
+                code = cli._cmd_channels_bridge_start(channel_name="whatsapp")
+        self.assertEqual(code, 1)
+        self.assertIn("Failed to prepare bridge directory", mocked_info.call_args[0][0])
+
+    def test_cmd_channels_bridge_status_reports_running(self) -> None:
+        from sentientagent_v2 import cli
+
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime_base = Path(tmp) / "bridge-runtime"
+            runtime_base.mkdir(parents=True, exist_ok=True)
+            state_path = runtime_base / "runtime_state.json"
+            state_path.write_text(json.dumps({"pid": 10001}), encoding="utf-8")
+            with patch.object(cli, "_bridge_base_dir", return_value=runtime_base):
+                with patch.object(cli, "_is_pid_running", return_value=True):
+                    with patch.object(cli.logger, "info") as mocked_info:
+                        code = cli._cmd_channels_bridge_status(channel_name="whatsapp")
+
+        self.assertEqual(code, 0)
+        self.assertIn("Bridge is running", mocked_info.call_args[0][0])
+
+    def test_cmd_channels_bridge_stop_removes_stale_state(self) -> None:
+        from sentientagent_v2 import cli
+
+        with tempfile.TemporaryDirectory() as tmp:
+            runtime_base = Path(tmp) / "bridge-runtime"
+            runtime_base.mkdir(parents=True, exist_ok=True)
+            state_path = runtime_base / "runtime_state.json"
+            state_path.write_text(json.dumps({"pid": 10001}), encoding="utf-8")
+            with patch.object(cli, "_bridge_base_dir", return_value=runtime_base):
+                with patch.object(cli, "_is_pid_running", return_value=False):
+                    with patch.object(cli.logger, "info"):
+                        code = cli._cmd_channels_bridge_stop(channel_name="whatsapp")
+
+            self.assertEqual(code, 0)
+            self.assertFalse(state_path.exists())
 
 
 if __name__ == "__main__":

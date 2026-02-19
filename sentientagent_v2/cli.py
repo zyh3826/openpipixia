@@ -7,12 +7,16 @@ import asyncio
 import datetime as dt
 import json
 import os
+import signal
+import socket
 import shutil
 import subprocess
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 from google.genai import types
 from loguru import logger
@@ -21,6 +25,7 @@ from .channels.factory import build_channel_manager, parse_enabled_channels, val
 from .config import (
     bootstrap_env_from_config,
     default_config,
+    get_data_dir,
     get_config_path,
     load_config,
     save_config,
@@ -286,6 +291,10 @@ def _cmd_doctor(*, output_json: bool = False, verbose: bool = False) -> int:
     configured_channels = parse_enabled_channels(None)
     channel_issues = validate_channel_setup(configured_channels)
     issues.extend(channel_issues)
+    if "whatsapp" in configured_channels and _whatsapp_bridge_precheck_enabled():
+        bridge_issue = _check_whatsapp_bridge_ready()
+        if bridge_issue:
+            issues.append(bridge_issue)
     web_enabled = env_enabled("SENTIENTAGENT_V2_WEB_ENABLED", default=True)
     web_search_enabled = env_enabled("SENTIENTAGENT_V2_WEB_SEARCH_ENABLED", default=True)
     web_search_provider = os.getenv("SENTIENTAGENT_V2_WEB_SEARCH_PROVIDER", "brave").strip().lower() or "brave"
@@ -602,6 +611,374 @@ def _dispatch_provider_command(args: argparse.Namespace, parser: argparse.Argume
     return handler()
 
 
+def _bridge_base_dir() -> Path:
+    """Return user-local bridge directory root."""
+    return get_data_dir() / "bridge"
+
+
+def _bridge_runtime_state_path() -> Path:
+    """Return persisted bridge runtime-state file path."""
+    return _bridge_base_dir() / "runtime_state.json"
+
+
+def _read_bridge_runtime_state() -> dict[str, Any] | None:
+    """Read bridge runtime state from disk."""
+    path = _bridge_runtime_state_path()
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def _write_bridge_runtime_state(payload: dict[str, Any]) -> None:
+    """Persist bridge runtime state to disk."""
+    path = _bridge_runtime_state_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+
+def _clear_bridge_runtime_state() -> None:
+    """Delete persisted bridge runtime state file."""
+    path = _bridge_runtime_state_path()
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+
+
+def _state_pid(state: dict[str, Any]) -> int | None:
+    """Extract validated process id from runtime-state payload."""
+    raw_pid = state.get("pid")
+    try:
+        pid = int(raw_pid)
+    except Exception:
+        return None
+    if pid <= 0:
+        return None
+    return pid
+
+
+def _is_pid_running(pid: int) -> bool:
+    """Return whether process id appears alive."""
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _resolve_bridge_source_dir() -> Path:
+    """Resolve WhatsApp bridge source directory containing package.json."""
+    override = os.getenv("SENTIENTAGENT_V2_WHATSAPP_BRIDGE_SOURCE", "").strip()
+    candidates: list[Path] = []
+    if override:
+        candidates.append(Path(override).expanduser())
+
+    package_bridge = Path(__file__).resolve().parent / "bridge"
+    monorepo_bridge = Path(__file__).resolve().parents[2] / "nanobot" / "bridge"
+    candidates.extend([package_bridge, monorepo_bridge])
+
+    for candidate in candidates:
+        if (candidate / "package.json").exists():
+            return candidate
+    raise RuntimeError(
+        "WhatsApp bridge source not found. "
+        "Set SENTIENTAGENT_V2_WHATSAPP_BRIDGE_SOURCE or include sentientagent_v2/bridge resources."
+    )
+
+
+def _get_bridge_dir() -> Path:
+    """Ensure local bridge runtime directory exists and return it."""
+    user_bridge = _bridge_base_dir()
+    if (user_bridge / "dist" / "index.js").exists():
+        return user_bridge
+
+    if shutil.which("npm") is None:
+        raise RuntimeError("npm not found. Please install Node.js >= 20.")
+
+    source = _resolve_bridge_source_dir()
+    user_bridge.parent.mkdir(parents=True, exist_ok=True)
+    if user_bridge.exists():
+        shutil.rmtree(user_bridge)
+    shutil.copytree(source, user_bridge, ignore=shutil.ignore_patterns("node_modules", "dist"))
+
+    try:
+        subprocess.run(["npm", "install"], cwd=user_bridge, check=True, capture_output=True)
+        subprocess.run(["npm", "run", "build"], cwd=user_bridge, check=True, capture_output=True)
+    except subprocess.CalledProcessError as exc:
+        stderr_text = ""
+        if isinstance(exc.stderr, bytes):
+            stderr_text = exc.stderr.decode(errors="ignore")
+        elif isinstance(exc.stderr, str):
+            stderr_text = exc.stderr
+        stderr_text = stderr_text.strip()
+        if stderr_text:
+            raise RuntimeError(f"Bridge build failed: {stderr_text[:500]}") from exc
+        raise RuntimeError(f"Bridge build failed: {exc}") from exc
+    return user_bridge
+
+
+def _whatsapp_bridge_token_from_config(config: dict[str, Any]) -> str:
+    """Extract WhatsApp bridge token from config payload."""
+    channels = config.get("channels", {})
+    if not isinstance(channels, dict):
+        return ""
+    whatsapp = channels.get("whatsapp", {})
+    if not isinstance(whatsapp, dict):
+        return ""
+    return str(whatsapp.get("bridgeToken", "")).strip()
+
+
+def _cmd_channels_login(*, channel_name: str) -> int:
+    """Start channel login helper (currently WhatsApp QR bridge only)."""
+    target = channel_name.strip().lower()
+    if target != "whatsapp":
+        logger.info(f"Unsupported channel for login: {channel_name}. Supported: whatsapp")
+        return 1
+
+    try:
+        bridge_dir = _get_bridge_dir()
+    except RuntimeError as exc:
+        logger.info(str(exc))
+        return 1
+    except Exception as exc:
+        logger.info(f"Failed to prepare bridge directory: {exc}")
+        return 1
+
+    env = dict(os.environ)
+    bridge_token = _whatsapp_bridge_token_from_config(load_config())
+    if bridge_token:
+        env["BRIDGE_TOKEN"] = bridge_token
+
+    logger.info("Starting WhatsApp bridge. Scan the QR code in this terminal to connect.")
+    try:
+        subprocess.run(["npm", "start"], cwd=bridge_dir, check=True, env=env)
+    except subprocess.CalledProcessError as exc:
+        logger.info(f"Bridge failed: {exc}")
+        return 1
+    except FileNotFoundError:
+        logger.info("npm not found. Please install Node.js >= 20.")
+        return 1
+    except KeyboardInterrupt:
+        return 0
+    return 0
+
+
+def _stop_bridge_pid(pid: int, *, timeout_seconds: float = 8.0) -> bool:
+    """Terminate one bridge process id and wait until it exits."""
+    if not _is_pid_running(pid):
+        return True
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False
+
+    deadline = time.monotonic() + max(timeout_seconds, 1.0)
+    while time.monotonic() < deadline:
+        if not _is_pid_running(pid):
+            return True
+        time.sleep(0.2)
+
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return True
+    except OSError:
+        return False
+
+    # Short grace period after SIGKILL.
+    grace_deadline = time.monotonic() + 2.0
+    while time.monotonic() < grace_deadline:
+        if not _is_pid_running(pid):
+            return True
+        time.sleep(0.1)
+    return not _is_pid_running(pid)
+
+
+def _cmd_channels_bridge_start(*, channel_name: str) -> int:
+    """Start channel bridge in background process."""
+    target = channel_name.strip().lower()
+    if target != "whatsapp":
+        logger.info(f"Unsupported channel bridge: {channel_name}. Supported: whatsapp")
+        return 1
+
+    state = _read_bridge_runtime_state()
+    if state:
+        existing_pid = _state_pid(state)
+        if existing_pid and _is_pid_running(existing_pid):
+            logger.info(f"Bridge is already running (pid={existing_pid}).")
+            return 0
+        _clear_bridge_runtime_state()
+
+    try:
+        bridge_dir = _get_bridge_dir()
+    except RuntimeError as exc:
+        logger.info(str(exc))
+        return 1
+    except Exception as exc:
+        logger.info(f"Failed to prepare bridge directory: {exc}")
+        return 1
+
+    env = dict(os.environ)
+    bridge_token = _whatsapp_bridge_token_from_config(load_config())
+    if bridge_token:
+        env["BRIDGE_TOKEN"] = bridge_token
+
+    log_path = _bridge_base_dir() / "bridge.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with log_path.open("ab") as log_fp:
+            proc = subprocess.Popen(
+                ["npm", "start"],
+                cwd=bridge_dir,
+                env=env,
+                stdout=log_fp,
+                stderr=log_fp,
+                start_new_session=True,
+            )
+    except FileNotFoundError:
+        logger.info("npm not found. Please install Node.js >= 20.")
+        return 1
+    except Exception as exc:
+        logger.info(f"Failed to start bridge: {exc}")
+        return 1
+
+    started_at_ms = int(dt.datetime.now(dt.timezone.utc).timestamp() * 1000)
+    _write_bridge_runtime_state(
+        {
+            "channel": target,
+            "pid": proc.pid,
+            "started_at_ms": started_at_ms,
+            "bridge_dir": str(bridge_dir),
+            "log_path": str(log_path),
+        }
+    )
+    logger.info(f"Bridge started in background (pid={proc.pid}).")
+    return 0
+
+
+def _cmd_channels_bridge_status(*, channel_name: str) -> int:
+    """Print bridge runtime status."""
+    target = channel_name.strip().lower()
+    if target != "whatsapp":
+        logger.info(f"Unsupported channel bridge: {channel_name}. Supported: whatsapp")
+        return 1
+
+    state = _read_bridge_runtime_state()
+    if not state:
+        logger.info("Bridge is not running (no runtime state).")
+        return 0
+
+    pid = _state_pid(state)
+    if pid and _is_pid_running(pid):
+        logger.info(f"Bridge is running (pid={pid}).")
+        return 0
+    logger.info("Bridge is not running (stale runtime state found).")
+    return 0
+
+
+def _cmd_channels_bridge_stop(*, channel_name: str) -> int:
+    """Stop background bridge process tracked by runtime state."""
+    target = channel_name.strip().lower()
+    if target != "whatsapp":
+        logger.info(f"Unsupported channel bridge: {channel_name}. Supported: whatsapp")
+        return 1
+
+    state = _read_bridge_runtime_state()
+    if not state:
+        logger.info("Bridge is not running.")
+        return 0
+
+    pid = _state_pid(state)
+    if pid is None:
+        _clear_bridge_runtime_state()
+        logger.info("Bridge runtime state was invalid and has been cleared.")
+        return 0
+
+    if not _is_pid_running(pid):
+        _clear_bridge_runtime_state()
+        logger.info(f"Bridge is not running (stale pid={pid} removed).")
+        return 0
+
+    if not _stop_bridge_pid(pid):
+        logger.info(f"Failed to stop bridge process pid={pid}.")
+        return 1
+
+    _clear_bridge_runtime_state()
+    logger.info(f"Bridge stopped (pid={pid}).")
+    return 0
+
+
+def _whatsapp_bridge_precheck_enabled() -> bool:
+    """Return whether WhatsApp bridge precheck is enabled."""
+    return env_enabled("SENTIENTAGENT_V2_WHATSAPP_BRIDGE_PRECHECK", default=True)
+
+
+def _check_whatsapp_bridge_ready() -> str | None:
+    """Verify WhatsApp bridge endpoint is reachable before runtime startup."""
+    bridge_url = os.getenv("WHATSAPP_BRIDGE_URL", "").strip()
+    if not bridge_url:
+        return "Missing WHATSAPP_BRIDGE_URL for whatsapp channel."
+
+    parsed = urlparse(bridge_url)
+    if parsed.scheme not in {"ws", "wss"} or not parsed.hostname:
+        return (
+            f"Invalid WHATSAPP_BRIDGE_URL '{bridge_url}'. "
+            "Expected ws://host:port or wss://host:port."
+        )
+
+    port = parsed.port or (443 if parsed.scheme == "wss" else 80)
+    try:
+        with socket.create_connection((parsed.hostname, port), timeout=1.5):
+            pass
+    except OSError as exc:
+        return (
+            f"WhatsApp bridge is unreachable at {bridge_url} ({exc}). "
+            "Run: sentientagent_v2 channels bridge start"
+        )
+    return None
+
+
+def _dispatch_channels_bridge_command(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    """Dispatch channels bridge subcommands."""
+    handlers: dict[str, Callable[[], int]] = {
+        "start": lambda: _cmd_channels_bridge_start(channel_name=args.channel_name),
+        "status": lambda: _cmd_channels_bridge_status(channel_name=args.channel_name),
+        "stop": lambda: _cmd_channels_bridge_stop(channel_name=args.channel_name),
+    }
+    handler = handlers.get(args.channels_bridge_command)
+    if handler is None:
+        parser.print_help()
+        return 2
+    return handler()
+
+
+def _dispatch_channels_command(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    """Dispatch channels subcommands from parsed argparse namespace."""
+    handlers: dict[str, Callable[[], int]] = {
+        "login": lambda: _cmd_channels_login(channel_name=args.channel_name),
+        "bridge": lambda: _dispatch_channels_bridge_command(args, parser),
+    }
+    handler = handlers.get(args.channels_command)
+    if handler is None:
+        parser.print_help()
+        return 2
+    return handler()
+
+
 def _cmd_run(passthrough_args: list[str]) -> int:
     if shutil.which("adk") is None:
         logger.info("`adk` CLI not found. Install with: pip install google-adk")
@@ -721,6 +1098,11 @@ def _cmd_gateway(
             for item in issues:
                 logger.info(f"[doctor] {item}")
             return 1
+        if "whatsapp" in names and _whatsapp_bridge_precheck_enabled():
+            bridge_issue = _check_whatsapp_bridge_ready()
+            if bridge_issue:
+                logger.info(f"[doctor] {bridge_issue}")
+                return 1
         mcp_issues = await _required_mcp_preflight(list(getattr(root_agent, "tools", [])))
         if mcp_issues:
             for item in mcp_issues:
@@ -1069,6 +1451,42 @@ def main(argv: list[str] | None = None) -> None:
         help="OAuth provider name, e.g. openai-codex or github-copilot.",
     )
 
+    channels_parser = subparsers.add_parser("channels", help="Manage channel helper commands.")
+    channels_subparsers = channels_parser.add_subparsers(dest="channels_command", required=True)
+    channels_login_parser = channels_subparsers.add_parser("login", help="Start QR login helper for a channel.")
+    channels_login_parser.add_argument(
+        "channel_name",
+        nargs="?",
+        default="whatsapp",
+        help="Channel name (default: whatsapp).",
+    )
+    channels_bridge_parser = channels_subparsers.add_parser(
+        "bridge",
+        help="Manage channel bridge background process.",
+    )
+    channels_bridge_subparsers = channels_bridge_parser.add_subparsers(dest="channels_bridge_command", required=True)
+    channels_bridge_start_parser = channels_bridge_subparsers.add_parser("start", help="Start channel bridge.")
+    channels_bridge_start_parser.add_argument(
+        "channel_name",
+        nargs="?",
+        default="whatsapp",
+        help="Channel name (default: whatsapp).",
+    )
+    channels_bridge_status_parser = channels_bridge_subparsers.add_parser("status", help="Show channel bridge status.")
+    channels_bridge_status_parser.add_argument(
+        "channel_name",
+        nargs="?",
+        default="whatsapp",
+        help="Channel name (default: whatsapp).",
+    )
+    channels_bridge_stop_parser = channels_bridge_subparsers.add_parser("stop", help="Stop channel bridge.")
+    channels_bridge_stop_parser.add_argument(
+        "channel_name",
+        nargs="?",
+        default="whatsapp",
+        help="Channel name (default: whatsapp).",
+    )
+
     cron_parser = subparsers.add_parser("cron", help="Manage scheduled tasks.")
     cron_subparsers = cron_parser.add_subparsers(dest="cron_command", required=True)
 
@@ -1109,6 +1527,8 @@ def main(argv: list[str] | None = None) -> None:
         code = _cmd_message(args.message, user_id=args.user_id, session_id=sid)
     elif args.command == "cron":
         code = _dispatch_cron_command(args, parser)
+    elif args.command == "channels":
+        code = _dispatch_channels_command(args, parser)
     elif args.command == "provider":
         code = _dispatch_provider_command(args, parser)
     else:

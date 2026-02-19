@@ -8,7 +8,7 @@ You can think of sentientagent_v2 as a "Hello World" edition of the OpenClaw-sty
 ## Scope
 
 - Keeps: local skill discovery and loading (`SKILL.md`)
-- Adds: minimal bus/channel gateway with pluggable channels (`local`, `feishu`)
+- Adds: minimal bus/channel gateway with pluggable channels (`local`, `feishu`, `telegram`, `whatsapp`, `discord`, `mochat`, `dingtalk`, `email`, `slack`, `qq`)
 - Runtime: Google ADK (`LlmAgent` + function tools), with provider registry support:
   - native: `google`
   - LiteLLM: `openai`, `openrouter`, `anthropic`, `deepseek`, `groq`, `gemini`, `dashscope`, `zhipu`, `moonshot`, `minimax`, `aihubmix`, `siliconflow`, `vllm`, `custom`, `github_copilot` (OAuth)
@@ -117,6 +117,10 @@ sentientagent_v2 provider login github-copilot
 sentientagent_v2 provider login openai-codex
 # Alias examples: codex -> openai-codex, copilot -> github-copilot
 sentientagent_v2 provider login codex
+sentientagent_v2 channels login
+sentientagent_v2 channels bridge start
+sentientagent_v2 channels bridge status
+sentientagent_v2 channels bridge stop
 ```
 
 ### Gateway: local channel
@@ -147,6 +151,27 @@ sentientagent_v2 gateway
 
 When users send file/image attachments in Feishu (for example PDF or image), `sentientagent_v2`
 downloads them to `SENTIENTAGENT_V2_WORKSPACE/inbox/feishu/` and forwards local paths to the agent.
+
+### WhatsApp QR Bridge (channels login helper)
+
+`sentientagent_v2` uses a local Node.js WhatsApp bridge (Baileys + WebSocket) for channel login and runtime transport.
+
+```bash
+# foreground login helper (shows QR in current terminal)
+sentientagent_v2 channels login
+
+# optional background bridge lifecycle
+sentientagent_v2 channels bridge start
+sentientagent_v2 channels bridge status
+sentientagent_v2 channels bridge stop
+```
+
+Notes:
+
+- `channels login` starts bridge in foreground and is best for first-time QR scan.
+- `channels bridge start` runs bridge in background and writes runtime state to `~/.sentientagent_v2/bridge/runtime_state.json`.
+- `gateway` and `doctor` run a WhatsApp bridge precheck by default when `whatsapp` is enabled. Disable with `SENTIENTAGENT_V2_WHATSAPP_BRIDGE_PRECHECK=0`.
+- If bridge source path needs override in dev mode, set `SENTIENTAGENT_V2_WHATSAPP_BRIDGE_SOURCE=/absolute/path/to/bridge`.
 
 ## Cron Scheduler
 
@@ -209,7 +234,7 @@ In normal usage, you do not need to set environment variables manually.
 Configure these fields in `config.json`:
 
 - `providers.<provider>.enabled / apiKey / model / apiBase / extraHeaders` (enable exactly one)
-- `channels.local.enabled`, `channels.feishu.enabled`, and `channels.feishu.*`
+- `channels.<name>.enabled` and channel-specific fields (for example `channels.feishu.*`, `channels.whatsapp.*`)
 - `web.enabled`, `web.search.enabled / provider / apiKey / maxResults`
 - `security.restrictToWorkspace / allowExec / allowNetwork / execAllowlist`
 - `tools.mcpServers` (optional MCP server map; supports stdio and remote HTTP/SSE)
@@ -219,6 +244,10 @@ Use env vars only for temporary overrides, for example:
 - `GOOGLE_API_KEY`
 - `OPENAI_API_KEY`
 - `SENTIENTAGENT_V2_CHANNELS`
+- `WHATSAPP_BRIDGE_URL`
+- `WHATSAPP_BRIDGE_TOKEN`
+- `SENTIENTAGENT_V2_WHATSAPP_BRIDGE_PRECHECK` (`1` by default)
+- `SENTIENTAGENT_V2_WHATSAPP_BRIDGE_SOURCE` (optional bridge source override)
 - `SENTIENTAGENT_V2_EXEC_ALLOWLIST`
 - `SENTIENTAGENT_V2_MCP_SERVERS_JSON`
 - `SENTIENTAGENT_V2_MCP_REQUIRED_SERVERS` (comma-separated strong dependencies for gateway startup)
@@ -236,6 +265,10 @@ When `debug=true` (or `SENTIENTAGENT_V2_DEBUG=1`), `sentientagent_v2` emits call
 
 If your environment uses a SOCKS proxy, Feishu websocket requires `python-socks`.
 It is already included in default dependencies.
+
+## WhatsApp Note
+
+WhatsApp bridge helper requires Node.js (`npm`) >= 20. Runtime bridge files are managed under `~/.sentientagent_v2/bridge/`.
 
 ## Config Example
 
