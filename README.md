@@ -173,6 +173,16 @@ Notes:
 - `gateway` and `doctor` run a WhatsApp bridge precheck by default when `whatsapp` is enabled. Disable with `SENTIENTAGENT_V2_WHATSAPP_BRIDGE_PRECHECK=0`.
 - If bridge source path needs override in dev mode, set `SENTIENTAGENT_V2_WHATSAPP_BRIDGE_SOURCE=/absolute/path/to/bridge`.
 
+#### End-to-end quick check
+
+```bash
+# 1) one-command QR + smoke helper
+scripts/whatsapp_bridge_e2e.sh full
+
+# 2) or run smoke only (background start/status/doctor/stop)
+scripts/whatsapp_bridge_e2e.sh smoke
+```
+
 ## Cron Scheduler
 
 `sentientagent_v2` cron is an in-process scheduler. It does not write to OS crontab.
