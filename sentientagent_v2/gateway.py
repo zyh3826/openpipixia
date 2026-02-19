@@ -14,6 +14,7 @@ from .bus.events import InboundMessage, OutboundMessage
 from .bus.queue import MessageBus
 from .channels.manager import ChannelManager
 from .runtime.adk_utils import extract_text, merge_text_stream
+from .runtime.cron_helpers import cron_store_path
 from .runtime.cron_service import CronJob, CronService
 from .runtime.message_time import append_execution_time, inject_request_time
 from .runtime.runner_factory import create_runner
@@ -67,7 +68,28 @@ class Gateway:
 
     def _cron_store_path(self) -> Path:
         workspace = load_security_policy().workspace_root
-        return workspace / ".sentientagent_v2" / "cron_jobs.json"
+        return cron_store_path(workspace)
+
+    async def _run_text_stream(
+        self,
+        *,
+        runner: Any,
+        channel: str,
+        chat_id: str,
+        default_when_empty: str | None = "(no response)",
+        **run_kwargs: Any,
+    ) -> str:
+        """Run one ADK stream and merge emitted text parts into final output."""
+        final = ""
+        with route_context(channel, chat_id):
+            async for event in runner.run_async(**run_kwargs):
+                text = extract_text(getattr(event, "content", None))
+                final = merge_text_stream(final, text)
+        if final:
+            return final
+        if default_when_empty is None:
+            return ""
+        return default_when_empty
 
     async def _run_cron_job(self, job: CronJob) -> str | None:
         """Execute a scheduled cron job through the shared ADK runner."""
@@ -75,17 +97,14 @@ class Gateway:
         target_chat_id = job.payload.to or "default"
         prompt = append_execution_time(job.payload.message)
         request = types.UserContent(parts=[types.Part.from_text(text=prompt)])
-        final = ""
-        with route_context(target_channel, target_chat_id):
-            async for event in self.runner.run_async(
-                user_id="cron",
-                session_id=f"cron:{job.id}",
-                new_message=request,
-            ):
-                text = extract_text(getattr(event, "content", None))
-                final = merge_text_stream(final, text)
-        if not final:
-            final = "(no response)"
+        final = await self._run_text_stream(
+            runner=self.runner,
+            channel=target_channel,
+            chat_id=target_chat_id,
+            user_id="cron",
+            session_id=f"cron:{job.id}",
+            new_message=request,
+        )
         if job.payload.deliver:
             await self.bus.publish_outbound(
                 OutboundMessage(
@@ -131,18 +150,15 @@ class Gateway:
     async def process_message(self, msg: InboundMessage) -> OutboundMessage:
         prompt = inject_request_time(msg.content, received_at=msg.timestamp)
         request = types.UserContent(parts=[types.Part.from_text(text=prompt)])
-        final = ""
         # Route context lets tools like `message(...)` infer the current target.
-        with route_context(msg.channel, msg.chat_id):
-            async for event in self.runner.run_async(
-                user_id=msg.sender_id,
-                session_id=msg.session_key,
-                new_message=request,
-            ):
-                text = extract_text(getattr(event, "content", None))
-                final = merge_text_stream(final, text)
-        if not final:
-            final = "(no response)"
+        final = await self._run_text_stream(
+            runner=self.runner,
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            user_id=msg.sender_id,
+            session_id=msg.session_key,
+            new_message=request,
+        )
         return OutboundMessage(
             channel=msg.channel,
             chat_id=msg.chat_id,
@@ -220,16 +236,14 @@ class Gateway:
         sub_session_id = f"subagent:{request.task_id}"
         prompt = append_execution_time(request.prompt)
         new_message = types.UserContent(parts=[types.Part.from_text(text=prompt)])
-        final = ""
-        with route_context(request.channel, request.chat_id):
-            async for event in self._subagent_runner.run_async(
-                user_id=request.user_id,
-                session_id=sub_session_id,
-                new_message=new_message,
-            ):
-                text = extract_text(getattr(event, "content", None))
-                final = merge_text_stream(final, text)
-        return final or "(no response)"
+        return await self._run_text_stream(
+            runner=self._subagent_runner,
+            channel=request.channel,
+            chat_id=request.chat_id,
+            user_id=request.user_id,
+            session_id=sub_session_id,
+            new_message=new_message,
+        )
 
     async def _resume_parent_invocation(
         self,
@@ -246,17 +260,16 @@ class Gateway:
             role="user",
             parts=[types.Part(function_response=function_response)],
         )
-        final = ""
-        with route_context(request.channel, request.chat_id):
-            async for event in self.runner.run_async(
-                user_id=request.user_id,
-                session_id=request.session_id,
-                invocation_id=request.invocation_id,
-                new_message=new_message,
-            ):
-                text = extract_text(getattr(event, "content", None))
-                final = merge_text_stream(final, text)
-        return final
+        return await self._run_text_stream(
+            runner=self.runner,
+            channel=request.channel,
+            chat_id=request.chat_id,
+            default_when_empty=None,
+            user_id=request.user_id,
+            session_id=request.session_id,
+            invocation_id=request.invocation_id,
+            new_message=new_message,
+        )
 
     async def _publish_subagent_notification(
         self,
