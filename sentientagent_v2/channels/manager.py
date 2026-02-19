@@ -7,6 +7,7 @@ import logging
 
 from ..bus.queue import MessageBus
 from .base import BaseChannel
+from .polling_utils import cancel_background_task
 
 logger = logging.getLogger(__name__)
 
@@ -36,13 +37,8 @@ class ChannelManager:
         self._dispatch_task = asyncio.create_task(self._dispatch_outbound())
 
     async def stop_dispatcher(self) -> None:
-        if self._dispatch_task:
-            self._dispatch_task.cancel()
-            try:
-                await self._dispatch_task
-            except asyncio.CancelledError:
-                pass
-            self._dispatch_task = None
+        await cancel_background_task(self._dispatch_task)
+        self._dispatch_task = None
 
     async def _dispatch_outbound(self) -> None:
         while True:
