@@ -464,6 +464,15 @@ class FeishuChannel(BaseChannel):
         except json.JSONDecodeError:
             return raw_content
 
+    @staticmethod
+    def _parse_json_dict(raw_content: str) -> dict[str, Any]:
+        """Parse message content JSON and return dict payload or empty dict."""
+        try:
+            parsed = json.loads(raw_content)
+        except Exception:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+
     async def _download_image(self, image_key: str, message_id: str) -> Path:
         """Run image download in executor and return local path."""
         loop = asyncio.get_running_loop()
@@ -493,13 +502,7 @@ class FeishuChannel(BaseChannel):
         metadata: dict[str, Any],
     ) -> tuple[str, list[str]]:
         """Handle Feishu `post` message payload and return normalized content/media."""
-        post_payload: dict[str, Any] = {}
-        try:
-            parsed = json.loads(raw_content)
-            if isinstance(parsed, dict):
-                post_payload = parsed
-        except Exception:
-            post_payload = {}
+        post_payload = self._parse_json_dict(raw_content)
 
         text_content = _extract_post_text(post_payload) if post_payload else ""
         image_keys = _extract_post_image_keys(post_payload) if post_payload else []
@@ -540,13 +543,8 @@ class FeishuChannel(BaseChannel):
         metadata: dict[str, Any],
     ) -> tuple[str, list[str]]:
         """Handle Feishu `image` message payload and return normalized content/media."""
-        image_key = ""
-        try:
-            payload = json.loads(raw_content)
-            if isinstance(payload, dict):
-                image_key = str(payload.get("image_key", "")).strip()
-        except Exception:
-            pass
+        payload = self._parse_json_dict(raw_content)
+        image_key = str(payload.get("image_key", "")).strip()
         metadata["image_key"] = image_key
         if not image_key:
             return "Received an image message without image_key.", []
@@ -572,15 +570,9 @@ class FeishuChannel(BaseChannel):
         metadata: dict[str, Any],
     ) -> tuple[str, list[str]]:
         """Handle Feishu `file` message payload and return normalized content/media."""
-        file_key = ""
-        file_name = ""
-        try:
-            payload = json.loads(raw_content)
-            if isinstance(payload, dict):
-                file_key = str(payload.get("file_key", "")).strip()
-                file_name = str(payload.get("file_name", "")).strip()
-        except Exception:
-            pass
+        payload = self._parse_json_dict(raw_content)
+        file_key = str(payload.get("file_key", "")).strip()
+        file_name = str(payload.get("file_name", "")).strip()
         metadata["file_key"] = file_key
         metadata["file_name"] = file_name
         if not file_key:
@@ -599,6 +591,37 @@ class FeishuChannel(BaseChannel):
             metadata["download_error"] = str(exc)
             name_hint = file_name or file_key
             return f"Received file but download failed: {name_hint}", []
+
+    async def _handle_supported_message(
+        self,
+        *,
+        msg_type: str,
+        raw_content: str,
+        message_id: str,
+        metadata: dict[str, Any],
+    ) -> tuple[str, list[str]]:
+        """Handle one supported Feishu message type and return content/media."""
+        if msg_type == "text":
+            return self._extract_text_content(raw_content), []
+        if msg_type == "post":
+            return await self._handle_post_message(
+                raw_content=raw_content,
+                message_id=message_id,
+                metadata=metadata,
+            )
+        if msg_type == "image":
+            return await self._handle_image_message(
+                raw_content=raw_content,
+                message_id=message_id,
+                metadata=metadata,
+            )
+        if msg_type == "file":
+            return await self._handle_file_message(
+                raw_content=raw_content,
+                message_id=message_id,
+                metadata=metadata,
+            )
+        return "", []
 
     async def _on_message(self, data: "P2ImMessageReceiveV1") -> None:
         try:
@@ -625,28 +648,12 @@ class FeishuChannel(BaseChannel):
                 "chat_type": chat_type,
                 "message_id": message_id,
             }
-            content = ""
-            media_paths: list[str] = []
-            if msg_type == "text":
-                content = self._extract_text_content(raw_content)
-            elif msg_type == "post":
-                content, media_paths = await self._handle_post_message(
-                    raw_content=raw_content,
-                    message_id=message_id,
-                    metadata=metadata,
-                )
-            elif msg_type == "image":
-                content, media_paths = await self._handle_image_message(
-                    raw_content=raw_content,
-                    message_id=message_id,
-                    metadata=metadata,
-                )
-            elif msg_type == "file":
-                content, media_paths = await self._handle_file_message(
-                    raw_content=raw_content,
-                    message_id=message_id,
-                    metadata=metadata,
-                )
+            content, media_paths = await self._handle_supported_message(
+                msg_type=msg_type,
+                raw_content=raw_content,
+                message_id=message_id,
+                metadata=metadata,
+            )
 
             if not content:
                 return
