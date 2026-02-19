@@ -19,6 +19,7 @@ from .discord import DiscordChannel
 from .email import EmailChannel
 from .feishu import FEISHU_AVAILABLE, FeishuChannel
 from .local import LocalChannel
+from .mochat import MochatChannel
 from .qq import QQ_AVAILABLE, QQChannel
 from .slack import SlackChannel
 from .telegram import TelegramChannel
@@ -143,6 +144,25 @@ def _validate_whatsapp() -> list[str]:
         issues.append("WhatsApp channel requires `websockets` package.")
     if not os.getenv("WHATSAPP_BRIDGE_URL", "").strip():
         issues.append("Missing WHATSAPP_BRIDGE_URL for whatsapp channel.")
+    return issues
+
+
+def _build_mochat(bus: MessageBus, _local_writer: LocalWriter) -> BaseChannel:
+    allow_from = [item.strip() for item in os.getenv("MOCHAT_ALLOW_FROM", "").split(",") if item.strip()]
+    return MochatChannel(
+        bus=bus,
+        base_url=os.getenv("MOCHAT_BASE_URL", "").strip(),
+        claw_token=os.getenv("MOCHAT_CLAW_TOKEN", "").strip(),
+        allow_from=allow_from,
+    )
+
+
+def _validate_mochat() -> list[str]:
+    issues: list[str] = []
+    if not os.getenv("MOCHAT_BASE_URL", "").strip():
+        issues.append("Missing MOCHAT_BASE_URL for mochat channel.")
+    if not os.getenv("MOCHAT_CLAW_TOKEN", "").strip():
+        issues.append("Missing MOCHAT_CLAW_TOKEN for mochat channel.")
     return issues
 
 
@@ -292,6 +312,11 @@ def _make_registry() -> dict[str, ChannelSpec]:
             name="discord",
             build=_build_discord,
             validate_setup=_validate_discord,
+        ),
+        "mochat": ChannelSpec(
+            name="mochat",
+            build=_build_mochat,
+            validate_setup=_validate_mochat,
         ),
         "dingtalk": ChannelSpec(
             name="dingtalk",

@@ -376,6 +376,18 @@ def config_to_env(config: dict[str, Any]) -> dict[str, str]:
     discord_poll_channels = discord.get("pollChannels", [])
     if not isinstance(discord_poll_channels, list):
         discord_poll_channels = []
+    mochat = channels.get("mochat", {}) if isinstance(channels, dict) else {}
+    if not isinstance(mochat, dict):
+        mochat = {}
+    mochat_allow_from = mochat.get("allowFrom", [])
+    if not isinstance(mochat_allow_from, list):
+        mochat_allow_from = []
+    mochat_sessions = mochat.get("sessions", [])
+    if not isinstance(mochat_sessions, list):
+        mochat_sessions = []
+    mochat_panels = mochat.get("panels", [])
+    if not isinstance(mochat_panels, list):
+        mochat_panels = []
     dingtalk = channels.get("dingtalk", {}) if isinstance(channels, dict) else {}
     if not isinstance(dingtalk, dict):
         dingtalk = {}
@@ -440,6 +452,12 @@ def config_to_env(config: dict[str, Any]) -> dict[str, str]:
         "DISCORD_POLL_CHANNELS": ",".join(normalize_allowlist(discord_poll_channels)),
         "DISCORD_POLL_INTERVAL_SECONDS": str(discord.get("pollIntervalSeconds", 10)),
         "DISCORD_INCLUDE_BOTS": "1" if is_enabled(discord.get("includeBots"), default=False) else "0",
+        "MOCHAT_BASE_URL": str(mochat.get("baseUrl", "")).strip(),
+        "MOCHAT_CLAW_TOKEN": str(mochat.get("clawToken", "")).strip(),
+        "MOCHAT_AGENT_USER_ID": str(mochat.get("agentUserId", "")).strip(),
+        "MOCHAT_SESSIONS": ",".join(normalize_allowlist(mochat_sessions)),
+        "MOCHAT_PANELS": ",".join(normalize_allowlist(mochat_panels)),
+        "MOCHAT_ALLOW_FROM": ",".join(normalize_allowlist(mochat_allow_from)),
         "DINGTALK_CLIENT_ID": str(dingtalk.get("clientId", "")).strip(),
         "DINGTALK_CLIENT_SECRET": str(dingtalk.get("clientSecret", "")).strip(),
         "DINGTALK_ALLOW_FROM": ",".join(normalize_allowlist(dingtalk_allow_from)),
