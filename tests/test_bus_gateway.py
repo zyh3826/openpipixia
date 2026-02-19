@@ -97,6 +97,60 @@ class GatewayTests(unittest.TestCase):
 
         self.assertEqual(outbound.content, "hello world")
 
+    def test_process_message_help_command_skips_runner(self) -> None:
+        fake_event = pytypes.SimpleNamespace(
+            content=pytypes.SimpleNamespace(parts=[pytypes.SimpleNamespace(text="unused")])
+        )
+        captured_calls: list[dict[str, object]] = []
+
+        class _FakeRunner:
+            async def run_async(self, **kwargs):
+                captured_calls.append(kwargs)
+                yield fake_event
+
+        fake_agent = pytypes.SimpleNamespace(name="sentientagent_v2")
+        with patch("sentientagent_v2.gateway.create_runner", return_value=(_FakeRunner(), object())):
+            gateway = Gateway(agent=fake_agent, app_name="sentientagent_v2", bus=MessageBus())
+            inbound = InboundMessage(channel="local", sender_id="u1", chat_id="c1", content="/help")
+            outbound = asyncio.run(gateway.process_message(inbound))
+
+        self.assertIn("/new", outbound.content)
+        self.assertIn("/help", outbound.content)
+        self.assertEqual(captured_calls, [])
+
+    def test_process_message_new_command_rotates_session_id(self) -> None:
+        fake_event = pytypes.SimpleNamespace(
+            content=pytypes.SimpleNamespace(parts=[pytypes.SimpleNamespace(text="ok")])
+        )
+        captured_calls: list[dict[str, object]] = []
+
+        class _FakeRunner:
+            async def run_async(self, **kwargs):
+                captured_calls.append(kwargs)
+                yield fake_event
+
+        fake_agent = pytypes.SimpleNamespace(name="sentientagent_v2")
+        with patch("sentientagent_v2.gateway.create_runner", return_value=(_FakeRunner(), object())):
+            gateway = Gateway(agent=fake_agent, app_name="sentientagent_v2", bus=MessageBus())
+
+            first = InboundMessage(channel="local", sender_id="u1", chat_id="c1", content="hello")
+            first_outbound = asyncio.run(gateway.process_message(first))
+            self.assertEqual(first_outbound.content, "ok")
+
+            reset = InboundMessage(channel="local", sender_id="u1", chat_id="c1", content="/new")
+            reset_outbound = asyncio.run(gateway.process_message(reset))
+            self.assertEqual(reset_outbound.content, "Started a new conversation session.")
+
+            second = InboundMessage(channel="local", sender_id="u1", chat_id="c1", content="hello again")
+            second_outbound = asyncio.run(gateway.process_message(second))
+            self.assertEqual(second_outbound.content, "ok")
+
+        self.assertEqual(len(captured_calls), 2)
+        self.assertEqual(captured_calls[0]["session_id"], "local:c1")
+        rotated_session_id = captured_calls[1]["session_id"]
+        self.assertNotEqual(rotated_session_id, "local:c1")
+        self.assertTrue(str(rotated_session_id).startswith("local:c1:new:"))
+
 
 class GatewayLoopResilienceTests(unittest.IsolatedAsyncioTestCase):
     async def test_consume_inbound_continues_after_processing_error(self) -> None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import uuid
 from pathlib import Path
 from typing import Any, Callable
 
@@ -24,6 +25,12 @@ from .security import load_security_policy
 from .tools import SubagentSpawnRequest, configure_outbound_publisher, configure_subagent_dispatcher
 
 logger = logging.getLogger(__name__)
+
+_HELP_TEXT = (
+    "sentientagent_v2 commands:\n"
+    "/new - Start a new conversation session\n"
+    "/help - Show available commands"
+)
 
 
 async def _cancel_task(task: asyncio.Task[Any] | None) -> None:
@@ -82,6 +89,8 @@ class Gateway:
         self._cron_service: CronService | None = None
         self._subagent_tasks: dict[str, asyncio.Task[None]] = {}
         self._subagent_semaphore = asyncio.Semaphore(self._subagent_max_concurrency())
+        # Map logical inbound session keys (channel:chat_id) to active ADK session ids.
+        self._session_overrides: dict[str, str] = {}
 
     @staticmethod
     def _subagent_max_concurrency() -> int:
@@ -170,6 +179,24 @@ class Gateway:
             await self.channel_manager.stop_all()
 
     async def process_message(self, msg: InboundMessage) -> OutboundMessage:
+        command = msg.content.strip().lower()
+        if command == "/help":
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=_HELP_TEXT,
+                metadata=msg.metadata,
+            )
+        if command == "/new":
+            self._session_overrides[msg.session_key] = f"{msg.session_key}:new:{uuid.uuid4().hex[:12]}"
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="Started a new conversation session.",
+                metadata=msg.metadata,
+            )
+
+        active_session_id = self._session_overrides.get(msg.session_key, msg.session_key)
         prompt = inject_request_time(msg.content, received_at=msg.timestamp)
         request = types.UserContent(parts=[types.Part.from_text(text=prompt)])
         # Route context lets tools like `message(...)` infer the current target.
@@ -178,7 +205,7 @@ class Gateway:
             channel=msg.channel,
             chat_id=msg.chat_id,
             user_id=msg.sender_id,
-            session_id=msg.session_key,
+            session_id=active_session_id,
             new_message=request,
         )
         return OutboundMessage(
