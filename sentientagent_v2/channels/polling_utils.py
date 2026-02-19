@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from typing import Any, Awaitable, Callable, Iterable
 
@@ -45,3 +46,11 @@ async def run_poll_loop(
             logger.exception(error_message)
             await asyncio.sleep(max(float(retry_delay_seconds), 0))
         await asyncio.sleep(max(float(interval_seconds), 0))
+
+
+def parse_json_payload(raw: str, *, error_context: str) -> Any:
+    """Decode an optional JSON response body with consistent error conversion."""
+    try:
+        return json.loads(raw) if raw else {}
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"{error_context}: {exc}") from exc

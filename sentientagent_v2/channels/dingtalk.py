@@ -13,7 +13,7 @@ from urllib.request import Request, urlopen
 
 from ..bus.events import OutboundMessage
 from .base import BaseChannel
-from .polling_utils import cancel_background_task
+from .polling_utils import cancel_background_task, parse_json_payload
 
 logger = logging.getLogger(__name__)
 
@@ -34,18 +34,6 @@ except Exception:  # pragma: no cover - optional runtime dependency
 def _ack_ok() -> tuple[str, str]:
     status = getattr(AckMessage, "STATUS_OK", "OK")
     return str(status), "OK"
-
-
-def _parse_api_json(raw: str, *, path: str) -> dict[str, Any]:
-    """Decode one DingTalk API response body into a JSON object."""
-    try:
-        parsed = json.loads(raw) if raw else {}
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"DingTalk API invalid JSON ({path}): {exc}") from exc
-
-    if not isinstance(parsed, dict):
-        raise RuntimeError(f"DingTalk API unexpected response ({path})")
-    return parsed
 
 
 class DingTalkCallbackHandler(CallbackHandler):
@@ -125,7 +113,11 @@ class DingTalkChannel(BaseChannel):
             raise RuntimeError(f"DingTalk API HTTP error ({path}): {exc.code}") from exc
         except URLError as exc:
             raise RuntimeError(f"DingTalk API network error ({path}): {exc.reason}") from exc
-        return _parse_api_json(raw, path=path)
+
+        parsed = parse_json_payload(raw, error_context=f"DingTalk API invalid JSON ({path})")
+        if not isinstance(parsed, dict):
+            raise RuntimeError(f"DingTalk API unexpected response ({path})")
+        return parsed
 
     async def _api_call(
         self,
