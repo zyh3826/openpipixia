@@ -10,7 +10,7 @@ import unittest
 import asyncio
 import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 
 class CLITests(unittest.TestCase):
@@ -55,6 +55,46 @@ class CLITests(unittest.TestCase):
                     cli.main(["doctor", "--json", "--verbose"])
                 self.assertEqual(ctx.exception.code, 0)
                 mocked_doctor.assert_called_once_with(output_json=True, verbose=True)
+
+    def test_provider_login_mode_dispatch(self) -> None:
+        from sentientagent_v2 import cli
+
+        with patch.object(cli, "bootstrap_env_from_config") as mocked_bootstrap:
+            with patch.object(cli, "_cmd_provider_login", return_value=0) as mocked_login:
+                with self.assertRaises(SystemExit) as ctx:
+                    cli.main(["provider", "login", "openai-codex"])
+                self.assertEqual(ctx.exception.code, 0)
+                mocked_bootstrap.assert_called_once()
+                mocked_login.assert_called_once_with("openai-codex")
+
+    def test_provider_list_mode_dispatch(self) -> None:
+        from sentientagent_v2 import cli
+
+        with patch.object(cli, "bootstrap_env_from_config") as mocked_bootstrap:
+            with patch.object(cli, "_cmd_provider_list", return_value=0) as mocked_list:
+                with self.assertRaises(SystemExit) as ctx:
+                    cli.main(["provider", "list"])
+                self.assertEqual(ctx.exception.code, 0)
+                mocked_bootstrap.assert_called_once()
+                mocked_list.assert_called_once_with()
+
+    def test_cmd_provider_login_rejects_non_oauth_provider(self) -> None:
+        from sentientagent_v2 import cli
+
+        with patch.object(cli.logger, "info") as mocked_info:
+            code = cli._cmd_provider_login("openai")
+        self.assertEqual(code, 1)
+        self.assertIn("Unknown OAuth provider", mocked_info.call_args[0][0])
+
+    def test_cmd_provider_login_invokes_registered_handler(self) -> None:
+        from sentientagent_v2 import cli
+
+        handler = Mock()
+        with patch.dict(cli._PROVIDER_LOGIN_HANDLERS, {"openai_codex": handler}, clear=False):
+            with patch.object(cli.logger, "info"):
+                code = cli._cmd_provider_login("openai-codex")
+        self.assertEqual(code, 0)
+        handler.assert_called_once_with()
 
     def test_cmd_doctor_includes_mcp_health_failures(self) -> None:
         from sentientagent_v2 import cli

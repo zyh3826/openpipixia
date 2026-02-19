@@ -28,7 +28,15 @@ from .config import (
 from .env_utils import env_enabled
 from .logging_utils import debug_logging_enabled, emit_debug
 from .mcp_registry import ManagedMcpToolset, build_mcp_toolsets_from_env, probe_mcp_toolsets, summarize_mcp_toolsets
-from .provider import normalize_model_name, normalize_provider_name, provider_api_key_env, validate_provider_runtime
+from .provider import (
+    normalize_model_name,
+    normalize_provider_name,
+    oauth_provider_names,
+    provider_api_key_env,
+    provider_names,
+    validate_provider_runtime,
+)
+from .provider_registry import find_provider_spec
 from .runtime.adk_utils import extract_text, merge_text_stream
 from .runtime.cron_helpers import cron_store_path, format_schedule, format_timestamp_ms
 from .runtime.cron_service import CronService
@@ -285,6 +293,113 @@ def _cmd_doctor(*, output_json: bool = False, verbose: bool = False) -> int:
 
     logger.info("Environment looks good.")
     return 0
+
+
+_PROVIDER_LOGIN_HANDLERS: dict[str, Callable[[], None]] = {}
+
+
+def _register_provider_login(provider_name: str) -> Callable[[Callable[[], None]], Callable[[], None]]:
+    """Register a provider OAuth login handler."""
+
+    def _decorator(fn: Callable[[], None]) -> Callable[[], None]:
+        _PROVIDER_LOGIN_HANDLERS[provider_name] = fn
+        return fn
+
+    return _decorator
+
+
+@_register_provider_login("openai_codex")
+def _provider_login_openai_codex() -> None:
+    """Authenticate OpenAI Codex with oauth-cli-kit interactive flow."""
+    try:
+        from oauth_cli_kit import get_token, login_oauth_interactive
+    except ImportError as exc:
+        raise RuntimeError("oauth-cli-kit is not installed. Run: pip install oauth-cli-kit") from exc
+
+    token = None
+    try:
+        token = get_token()
+    except Exception:
+        token = None
+
+    if not (token and getattr(token, "access", "")):
+        logger.info("Starting interactive OAuth login for OpenAI Codex...")
+        token = login_oauth_interactive(
+            print_fn=lambda s: _stdout_line(str(s)),
+            prompt_fn=lambda s: input(str(s)),
+        )
+
+    if not (token and getattr(token, "access", "")):
+        raise RuntimeError("OpenAI Codex authentication failed.")
+
+    account_id = str(getattr(token, "account_id", "")).strip()
+    suffix = f" ({account_id})" if account_id else ""
+    logger.info(f"OpenAI Codex OAuth authenticated{suffix}.")
+
+
+@_register_provider_login("github_copilot")
+def _provider_login_github_copilot() -> None:
+    """Authenticate GitHub Copilot via LiteLLM device flow."""
+    logger.info("Starting GitHub Copilot OAuth device flow...")
+
+    async def _trigger() -> None:
+        from litellm import acompletion
+
+        await acompletion(
+            model="github_copilot/gpt-4o",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=1,
+        )
+
+    asyncio.run(_trigger())
+    logger.info("GitHub Copilot OAuth authenticated.")
+
+
+def _cmd_provider_list() -> int:
+    """List providers known by the runtime."""
+    oauth_names = set(oauth_provider_names())
+    logger.info("Providers:")
+    for name in provider_names():
+        marker = " (OAuth)" if name in oauth_names else ""
+        logger.info(f"- {name}{marker}")
+    return 0
+
+
+def _cmd_provider_login(provider_name: str) -> int:
+    """Authenticate an OAuth provider account for local runtime use."""
+    normalized = provider_name.strip().lower().replace("-", "_")
+    spec = find_provider_spec(normalized)
+    oauth_names = ", ".join(name.replace("_", "-") for name in oauth_provider_names())
+    if spec is None or not spec.is_oauth:
+        logger.info(
+            f"Unknown OAuth provider '{provider_name}'. "
+            f"Supported providers: {oauth_names}"
+        )
+        return 1
+
+    handler = _PROVIDER_LOGIN_HANDLERS.get(spec.name)
+    if handler is None:
+        logger.info(f"OAuth login is not implemented for provider '{provider_name}'.")
+        return 1
+
+    try:
+        handler()
+    except Exception as exc:
+        logger.info(f"OAuth login failed for {provider_name}: {exc}")
+        return 1
+    return 0
+
+
+def _dispatch_provider_command(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
+    """Dispatch provider subcommands from parsed argparse namespace."""
+    handlers: dict[str, Callable[[], int]] = {
+        "list": _cmd_provider_list,
+        "login": lambda: _cmd_provider_login(args.provider_name),
+    }
+    handler = handlers.get(args.provider_command)
+    if handler is None:
+        parser.error("provider command is required")
+    return handler()
 
 
 def _cmd_run(passthrough_args: list[str]) -> int:
@@ -738,6 +853,15 @@ def main(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Enable terminal input loop when local channel is enabled.",
     )
+    provider_parser = subparsers.add_parser("provider", help="Manage runtime LLM providers.")
+    provider_subparsers = provider_parser.add_subparsers(dest="provider_command", required=True)
+    provider_subparsers.add_parser("list", help="List providers available to sentientagent_v2.")
+    provider_login_parser = provider_subparsers.add_parser("login", help="Authenticate an OAuth provider.")
+    provider_login_parser.add_argument(
+        "provider_name",
+        help="OAuth provider name, e.g. openai-codex or github-copilot.",
+    )
+
     cron_parser = subparsers.add_parser("cron", help="Manage scheduled tasks.")
     cron_subparsers = cron_parser.add_subparsers(dest="cron_command", required=True)
 
@@ -778,6 +902,8 @@ def main(argv: list[str] | None = None) -> None:
         code = _cmd_message(args.message, user_id=args.user_id, session_id=sid)
     elif args.command == "cron":
         code = _dispatch_cron_command(args, parser)
+    elif args.command == "provider":
+        code = _dispatch_provider_command(args, parser)
     else:
         handlers: dict[str, Callable[[], int]] = {
             "onboard": lambda: _cmd_onboard(force=args.force),

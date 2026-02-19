@@ -9,7 +9,10 @@ You can think of sentientagent_v2 as a "Hello World" edition of the OpenClaw-sty
 
 - Keeps: local skill discovery and loading (`SKILL.md`)
 - Adds: minimal bus/channel gateway with pluggable channels (`local`, `feishu`)
-- Runtime: Google ADK (`LlmAgent` + function tools), with providers `google` and `openai` (`openai` via LiteLLM)
+- Runtime: Google ADK (`LlmAgent` + function tools), with provider registry support:
+  - native: `google`
+  - LiteLLM: `openai`, `openrouter`, `anthropic`, `deepseek`, `groq`, `gemini`, `dashscope`, `zhipu`, `moonshot`, `minimax`, `aihubmix`, `siliconflow`, `vllm`, `custom`, `github_copilot` (OAuth)
+  - OAuth login only (runtime adapter pending): `openai_codex`
 - Bundles built-in skills under `sentientagent_v2/skills`
 - Provides core tools for file, shell, web, messaging, and scheduling workflows
 
@@ -107,6 +110,9 @@ sentientagent_v2 run
 ```bash
 sentientagent_v2 skills
 sentientagent_v2 doctor
+sentientagent_v2 provider list
+sentientagent_v2 provider login github-copilot
+sentientagent_v2 provider login openai-codex
 ```
 
 ### Gateway: local channel
@@ -198,7 +204,7 @@ python -m pytest -q
 In normal usage, you do not need to set environment variables manually.
 Configure these fields in `config.json`:
 
-- `providers.google.enabled / apiKey / model` or `providers.openai.enabled / apiKey / model` (enable exactly one)
+- `providers.<provider>.enabled / apiKey / model / apiBase / extraHeaders` (enable exactly one)
 - `channels.local.enabled`, `channels.feishu.enabled`, and `channels.feishu.*`
 - `web.enabled`, `web.search.enabled / provider / apiKey / maxResults`
 - `security.restrictToWorkspace / allowExec / allowNetwork / execAllowlist`
@@ -304,7 +310,8 @@ It is already included in default dependencies.
 ```
 
 Provider selection is determined by `enabled` flags only. Keep exactly one provider enabled.
-Runtime currently supports `google` and `openai`.
+Runtime supports `google` plus all registry-listed LiteLLM providers.
+`openai_codex` currently supports OAuth login only and requires a dedicated ADK runtime adapter before model invocation.
 
 `session` always uses SQLite. If `dbUrl` is empty, the default path is
 `~/.sentientagent_v2/database/sessions.db`.
