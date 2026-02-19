@@ -18,11 +18,24 @@ from .provider_registry import (
 )
 
 DEFAULT_PROVIDER = "google"
+_PROVIDER_ALIASES: dict[str, str] = {
+    "codex": "openai_codex",
+    "copilot": "github_copilot",
+    "kimi": "moonshot",
+    "zai": "zhipu",
+    "qwen": "dashscope",
+}
+
+
+def canonical_provider_name(raw: str | None) -> str:
+    """Normalize provider name and map supported aliases to canonical names."""
+    name = (raw or "").strip().lower().replace("-", "_")
+    return _PROVIDER_ALIASES.get(name, name)
 
 
 def normalize_provider_name(raw: str | None) -> str:
     """Normalize provider name from env/config."""
-    name = (raw or "").strip().lower().replace("-", "_")
+    name = canonical_provider_name(raw)
     if not name:
         return DEFAULT_PROVIDER
     return name if find_provider_spec(name) else DEFAULT_PROVIDER

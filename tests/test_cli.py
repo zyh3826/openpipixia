@@ -107,6 +107,16 @@ class CLITests(unittest.TestCase):
         self.assertEqual(code, 0)
         handler.assert_called_once_with()
 
+    def test_cmd_provider_login_accepts_alias(self) -> None:
+        from sentientagent_v2 import cli
+
+        handler = Mock()
+        with patch.dict(cli._PROVIDER_LOGIN_HANDLERS, {"openai_codex": handler}, clear=False):
+            with patch.object(cli.logger, "info"):
+                code = cli._cmd_provider_login("codex")
+        self.assertEqual(code, 0)
+        handler.assert_called_once_with()
+
     def test_cmd_provider_login_openai_codex_uses_cached_valid_token(self) -> None:
         from sentientagent_v2 import cli
 

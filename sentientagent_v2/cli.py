@@ -29,6 +29,7 @@ from .env_utils import env_enabled
 from .logging_utils import debug_logging_enabled, emit_debug
 from .mcp_registry import ManagedMcpToolset, build_mcp_toolsets_from_env, probe_mcp_toolsets, summarize_mcp_toolsets
 from .provider import (
+    canonical_provider_name,
     normalize_model_name,
     normalize_provider_name,
     oauth_provider_names,
@@ -495,7 +496,7 @@ def _cmd_provider_status(*, output_json: bool = False) -> int:
 
 def _cmd_provider_login(provider_name: str) -> int:
     """Authenticate an OAuth provider account for local runtime use."""
-    normalized = provider_name.strip().lower().replace("-", "_")
+    normalized = canonical_provider_name(provider_name)
     spec = find_provider_spec(normalized)
     oauth_names = ", ".join(name.replace("_", "-") for name in oauth_provider_names())
     if spec is None or not spec.is_oauth:

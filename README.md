@@ -115,6 +115,8 @@ sentientagent_v2 provider status
 sentientagent_v2 provider status --json
 sentientagent_v2 provider login github-copilot
 sentientagent_v2 provider login openai-codex
+# Alias examples: codex -> openai-codex, copilot -> github-copilot
+sentientagent_v2 provider login codex
 ```
 
 ### Gateway: local channel
