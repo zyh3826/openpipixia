@@ -25,8 +25,20 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(normalize_model_name("deepseek", "deepseek-chat"), "deepseek/deepseek-chat")
 
     def test_openai_codex_runtime_is_supported(self) -> None:
-        issue = validate_provider_runtime("openai_codex")
+        with patch("sentientagent_v2.provider.importlib.util.find_spec", return_value=object()):
+            issue = validate_provider_runtime("openai_codex")
         self.assertIsNone(issue)
+
+    def test_openai_codex_runtime_requires_oauth_cli_kit(self) -> None:
+        def _find_spec(name: str):
+            if name == "oauth_cli_kit":
+                return None
+            return object()
+
+        with patch("sentientagent_v2.provider.importlib.util.find_spec", side_effect=_find_spec):
+            issue = validate_provider_runtime("openai_codex")
+        self.assertIsNotNone(issue)
+        self.assertIn("oauth-cli-kit", str(issue))
 
     def test_build_openai_codex_model_from_env(self) -> None:
         env = {
@@ -34,8 +46,9 @@ class ProviderTests(unittest.TestCase):
             "SENTIENTAGENT_V2_MODEL": "openai-codex/gpt-5.1-codex",
             "SENTIENTAGENT_V2_PROVIDER_API_BASE": "https://chatgpt.com/backend-api/codex/responses",
         }
-        with patch.dict(os.environ, env, clear=False):
-            model = build_adk_model_from_env()
+        with patch("sentientagent_v2.provider.importlib.util.find_spec", return_value=object()):
+            with patch.dict(os.environ, env, clear=False):
+                model = build_adk_model_from_env()
         self.assertIsInstance(model, OpenAICodexLlm)
 
 

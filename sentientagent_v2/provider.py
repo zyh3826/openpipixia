@@ -98,6 +98,11 @@ def validate_provider_runtime(provider: str) -> str | None:
                 "Provider 'openai_codex' requires `httpx`. "
                 "Install dependencies with: pip install -e ."
             )
+        if importlib.util.find_spec("oauth_cli_kit") is None:
+            return (
+                "Provider 'openai_codex' requires `oauth-cli-kit`. "
+                "Install dependencies with: pip install -e ."
+            )
 
     if spec.runtime not in {RUNTIME_GOOGLE, RUNTIME_LITELLM, RUNTIME_CODEX}:
         if spec.unsupported_reason:
