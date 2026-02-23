@@ -74,11 +74,93 @@ def _json(obj: Any) -> str:
     return json.dumps(obj, ensure_ascii=False, indent=2)
 
 
-def read_file(path: str) -> str:
-    """Read a UTF-8 text file.
+_READ_DEFAULT_MAX_BYTES = 50 * 1024
+_READ_MIN_MAX_BYTES = 1024
+_READ_HARD_MAX_BYTES = 512 * 1024
+
+
+def _resolve_read_max_bytes() -> int:
+    """Resolve read output budget from env with safe bounds."""
+
+    raw = os.getenv("OPENHERON_READ_FILE_MAX_BYTES", "").strip()
+    if not raw:
+        return _READ_DEFAULT_MAX_BYTES
+    try:
+        parsed = int(raw)
+    except ValueError:
+        return _READ_DEFAULT_MAX_BYTES
+    return max(_READ_MIN_MAX_BYTES, min(parsed, _READ_HARD_MAX_BYTES))
+
+
+def _format_bytes(value: int) -> str:
+    """Format byte sizes for human-readable continuation notices."""
+
+    if value >= 1024 * 1024:
+        return f"{(value / (1024 * 1024)):.1f}MB"
+    if value >= 1024:
+        return f"{round(value / 1024)}KB"
+    return f"{value}B"
+
+
+def _truncate_utf8_text(text: str, *, max_bytes: int) -> str:
+    """Trim text to ``max_bytes`` without breaking UTF-8 character boundaries."""
+
+    encoded = text.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return text
+    clipped = encoded[:max_bytes]
+    while clipped:
+        try:
+            return clipped.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            clipped = clipped[: exc.start]
+    return ""
+
+
+def _resolve_read_path(*, path: str | None, file_path: str | None) -> str | None:
+    """Return the effective read path from canonical/alias fields."""
+
+    if isinstance(path, str) and path.strip():
+        return path
+    if isinstance(file_path, str) and file_path.strip():
+        return file_path
+    return None
+
+
+def _parse_positive_int(value: Any, *, field: str) -> int | str:
+    """Parse a positive integer from tool input or return an error message."""
+
+    if isinstance(value, bool):
+        return f"Error: {field} must be a positive integer."
+    parsed: Any = value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return f"Error: {field} must be a positive integer."
+        try:
+            parsed = int(stripped)
+        except ValueError:
+            return f"Error: {field} must be a positive integer."
+    if not isinstance(parsed, int):
+        return f"Error: {field} must be a positive integer."
+    if parsed <= 0:
+        return f"Error: {field} must be a positive integer."
+    return parsed
+
+
+def read_file(
+    path: str | None = None,
+    offset: int | None = None,
+    limit: int | None = None,
+    file_path: str | None = None,
+) -> str:
+    """Read a UTF-8 text file with optional line windowing.
 
     Args:
         path: Absolute or workspace-relative file path.
+        offset: Optional 1-based starting line number.
+        limit: Optional max number of lines to return.
+        file_path: Optional alias of ``path`` for Claude-style tool calls.
 
     Returns:
         File content on success, otherwise an "Error: ..." message.
@@ -86,16 +168,87 @@ def read_file(path: str) -> str:
     Notes:
         - Path resolution follows security policy (workspace restriction may apply).
         - Intended for text files.
+        - When ``offset``/``limit`` is provided, output is line-windowed.
     """
-    _debug("tool.read_file.input", {"path": path})
+    _debug(
+        "tool.read_file.input",
+        {"path": path, "file_path": file_path, "offset": offset, "limit": limit},
+    )
     try:
-        target = _resolve_path(path)
+        effective_path = _resolve_read_path(path=path, file_path=file_path)
+        if not effective_path:
+            return _ret("tool.read_file.output", "Error: Missing required parameter: path (path or file_path).")
+
+        offset_value: int | None = None
+        if offset is not None:
+            parsed_offset = _parse_positive_int(offset, field="offset")
+            if isinstance(parsed_offset, str):
+                return _ret("tool.read_file.output", parsed_offset)
+            offset_value = parsed_offset
+
+        limit_value: int | None = None
+        if limit is not None:
+            parsed_limit = _parse_positive_int(limit, field="limit")
+            if isinstance(parsed_limit, str):
+                return _ret("tool.read_file.output", parsed_limit)
+            limit_value = parsed_limit
+
+        target = _resolve_path(effective_path)
         if not target.exists():
-            return _ret("tool.read_file.output", f"Error: File not found: {path}")
+            return _ret("tool.read_file.output", f"Error: File not found: {effective_path}")
         if not target.is_file():
-            return _ret("tool.read_file.output", f"Error: Not a file: {path}")
-        result = target.read_text(encoding="utf-8")
-        _debug("tool.read_file.output", {"path": str(target), "chars": len(result)})
+            return _ret("tool.read_file.output", f"Error: Not a file: {effective_path}")
+
+        start_line = offset_value or 1
+        selected: list[str] = []
+        has_more = False
+        next_offset: int | None = None
+        read_max_bytes = _resolve_read_max_bytes()
+        selected_bytes = 0
+        with target.open("r", encoding="utf-8") as handle:
+            for line_number, line in enumerate(handle, start=1):
+                if line_number < start_line:
+                    continue
+                if limit_value is not None and len(selected) >= limit_value:
+                    has_more = True
+                    next_offset = line_number
+                    break
+                if limit_value is None:
+                    line_bytes = len(line.encode("utf-8"))
+                    if selected and selected_bytes + line_bytes > read_max_bytes:
+                        has_more = True
+                        next_offset = line_number
+                        break
+                    if not selected and line_bytes > read_max_bytes:
+                        clipped = _truncate_utf8_text(line, max_bytes=read_max_bytes)
+                        selected.append(clipped)
+                        selected_bytes = len(clipped.encode("utf-8"))
+                        has_more = True
+                        next_offset = line_number + 1
+                        break
+                    selected_bytes += line_bytes
+                selected.append(line)
+        result = "".join(selected)
+        if has_more and next_offset:
+            if limit_value is not None:
+                end_line = start_line + max(0, len(selected) - 1)
+                notice = f"[Showing lines {start_line}-{end_line}. Use offset={next_offset} to continue.]"
+            else:
+                budget = _format_bytes(read_max_bytes)
+                notice = f"[Read output capped at {budget} for this call. Use offset={next_offset} to continue.]"
+            result = f"{result}\n\n{notice}" if result else notice
+        _debug(
+            "tool.read_file.output",
+            {
+                "path": str(target),
+                "chars": len(result),
+                "offset": start_line,
+                "limit": limit_value,
+                "returned_lines": len(selected),
+                "has_more": has_more,
+                "next_offset": next_offset,
+            },
+        )
         return result
     except PermissionError as exc:
         return _ret("tool.read_file.output", f"Error: {exc}")

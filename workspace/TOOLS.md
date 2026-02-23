@@ -5,9 +5,9 @@ This document describes the tools available to openheron.
 ## File Operations
 
 ### read_file
-Read the contents of a file.
+Read text from a file, with optional line windowing.
 ```
-read_file(path: str) -> str
+read_file(path: str = None, offset: int = None, limit: int = None, file_path: str = None) -> str
 ```
 
 ### write_file

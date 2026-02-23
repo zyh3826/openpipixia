@@ -50,6 +50,51 @@ class ToolsTests(unittest.TestCase):
             self.assertIn("Successfully edited", edited)
             self.assertEqual(read_file("tmp/demo.txt"), "hello adk")
 
+    def test_read_file_supports_file_path_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["OPENHERON_WORKSPACE"] = tmp
+            write_file("tmp/alias.txt", "alias-ok")
+            self.assertEqual(read_file(file_path="tmp/alias.txt"), "alias-ok")
+
+    def test_read_file_supports_offset_and_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["OPENHERON_WORKSPACE"] = tmp
+            content = "\n".join(f"line-{idx}" for idx in range(1, 7))
+            write_file("tmp/lines.txt", content)
+
+            window = read_file(path="tmp/lines.txt", offset=2, limit=3)
+            self.assertIn("line-2\nline-3\nline-4\n", window)
+            self.assertIn("[Showing lines 2-4. Use offset=5 to continue.]", window)
+
+            tail = read_file(path="tmp/lines.txt", offset=5)
+            self.assertEqual(tail, "line-5\nline-6")
+
+            bad = read_file(path="tmp/lines.txt", offset=0)
+            self.assertIn("Error: offset must be a positive integer.", bad)
+
+    def test_read_file_limit_appends_continuation_hint(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["OPENHERON_WORKSPACE"] = tmp
+            content = "\n".join(f"line-{idx}" for idx in range(1, 7))
+            write_file("tmp/lines.txt", content)
+
+            page = read_file(path="tmp/lines.txt", offset=2, limit=2)
+            self.assertIn("line-2", page)
+            self.assertIn("line-3", page)
+            self.assertIn("[Showing lines 2-3. Use offset=4 to continue.]", page)
+
+    def test_read_file_caps_output_without_explicit_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["OPENHERON_WORKSPACE"] = tmp
+            os.environ["OPENHERON_READ_FILE_MAX_BYTES"] = "1024"
+            big = "\n".join(f"line-{idx}-{'x' * 80}" for idx in range(1, 400))
+            write_file("tmp/big.txt", big)
+
+            output = read_file(path="tmp/big.txt")
+            self.assertIn("line-1-", output)
+            self.assertIn("[Read output capped at 1KB for this call. Use offset=", output)
+            self.assertNotIn("line-399", output)
+
     def test_list_dir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             os.environ["OPENHERON_WORKSPACE"] = tmp
