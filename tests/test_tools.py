@@ -1432,6 +1432,14 @@ class ToolsTests(unittest.TestCase):
         self.assertEqual(payload["errorCode"], "proxy_timeout")
         self.assertIn("timeout", payload["error"])
 
+    def test_browser_tool_maps_proxy_direct_timeout_error(self) -> None:
+        os.environ["OPENHERON_BROWSER_NODE_PROXY_URL"] = "http://proxy.local:8787"
+        with patch("openheron.tools.urlopen", side_effect=TimeoutError("timed out")):
+            payload = json.loads(browser(action="status", target="node"))
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["status"], 504)
+        self.assertEqual(payload["errorCode"], "proxy_timeout")
+
     def test_browser_tool_maps_proxy_connection_refused_error(self) -> None:
         os.environ["OPENHERON_BROWSER_NODE_PROXY_URL"] = "http://proxy.local:8787"
         with patch("openheron.tools.urlopen", side_effect=URLError(ConnectionRefusedError("refused"))):

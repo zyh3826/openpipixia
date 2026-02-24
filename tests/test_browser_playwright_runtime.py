@@ -1106,6 +1106,17 @@ class PlaywrightRuntimeHelperTests(unittest.TestCase):
         self.assertEqual(ctx.exception.code, "relay_timeout")
         self.assertIn("timeout", str(ctx.exception).lower())
 
+    def test_chrome_relay_maps_direct_socket_timeout_error(self) -> None:
+        import socket
+
+        os.environ["OPENHERON_BROWSER_CHROME_RELAY_URL"] = "http://relay.local:9800"
+        runtime = PlaywrightBrowserRuntime()
+        with patch("openheron.browser_playwright_runtime.urlopen", side_effect=socket.timeout("timed out")):
+            with self.assertRaises(BrowserRuntimeError) as ctx:
+                runtime.status(profile="chrome")
+        self.assertEqual(ctx.exception.status, 504)
+        self.assertEqual(ctx.exception.code, "relay_timeout")
+
     def test_chrome_relay_maps_structured_http_error(self) -> None:
         os.environ["OPENHERON_BROWSER_CHROME_RELAY_URL"] = "http://relay.local:9800"
         runtime = PlaywrightBrowserRuntime()

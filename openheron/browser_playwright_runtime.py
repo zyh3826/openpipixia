@@ -1206,6 +1206,8 @@ class PlaywrightBrowserRuntime:
                 status=status,
                 code="relay_http_error",
             ) from exc
+        except (TimeoutError, socket.timeout) as exc:
+            raise BrowserRuntimeError("chrome relay timeout", status=504, code="relay_timeout") from exc
         except URLError as exc:
             reason = exc.reason
             if isinstance(reason, (TimeoutError, socket.timeout)):

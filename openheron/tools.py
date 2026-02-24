@@ -1650,6 +1650,17 @@ def browser(
                 )
                 payload = _inject_capability_warnings(payload, capability_warnings)
             return _ret("tool.browser.output", _json(payload))
+        except (TimeoutError, socket.timeout):
+            payload = _proxy_unavailable_payload(TimeoutError("timed out"))
+            if isinstance(payload, dict):
+                payload = _inject_proxy_capability(
+                    payload,
+                    capability_payload=capability_payload,
+                    target_name=normalized_target,
+                    force=True,
+                )
+                payload = _inject_capability_warnings(payload, capability_warnings)
+            return _ret("tool.browser.output", _json(payload))
         except URLError as e:
             payload = _proxy_unavailable_payload(e.reason)
             if isinstance(payload, dict):
