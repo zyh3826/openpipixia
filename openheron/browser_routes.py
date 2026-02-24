@@ -63,7 +63,10 @@ def _ensure_supported_target(req: BrowserRouteRequest, res: BrowserRouteResponse
 
 
 def _runtime_error_payload(exc: BrowserRuntimeError) -> dict[str, Any]:
-    return {"ok": False, "error": str(exc), "status": exc.status}
+    payload: dict[str, Any] = {"ok": False, "error": str(exc), "status": exc.status}
+    if getattr(exc, "code", None):
+        payload["errorCode"] = exc.code
+    return payload
 
 
 def _handle_runtime_error(res: BrowserRouteResponse, exc: BrowserRuntimeError) -> None:
@@ -122,7 +125,7 @@ def register_browser_basic_routes(registrar: BrowserRouteRegistrar, runtime: Bro
 
 
 def register_browser_agent_routes(registrar: BrowserRouteRegistrar, runtime: BrowserRuntime) -> None:
-    """Register browser agent routes (open/navigate/snapshot/screenshot/upload/dialog/act)."""
+    """Register browser agent routes (open/focus/close/navigate/snapshot/screenshot/pdf/console/upload/dialog/act)."""
 
     def open_route(req: BrowserRouteRequest, res: BrowserRouteResponse) -> None:
         if not _ensure_supported_target(req, res):
@@ -210,6 +213,38 @@ def register_browser_agent_routes(registrar: BrowserRouteRegistrar, runtime: Bro
         except BrowserRuntimeError as exc:
             _handle_runtime_error(res, exc)
 
+    def pdf_route(req: BrowserRouteRequest, res: BrowserRouteResponse) -> None:
+        if not _ensure_supported_target(req, res):
+            return
+        body = req.body
+        target_id = str(body.get("targetId") or "").strip() or None
+        out_path = str(body.get("path") or "").strip() or None
+        profile = str(req.query.get("profile") or "").strip() or None
+        try:
+            res.json(runtime.pdf_save(target_id=target_id, profile=profile, out_path=out_path))
+        except BrowserRuntimeError as exc:
+            _handle_runtime_error(res, exc)
+
+    def console_route(req: BrowserRouteRequest, res: BrowserRouteResponse) -> None:
+        if not _ensure_supported_target(req, res):
+            return
+        query = req.query
+        target_id = str(query.get("targetId") or "").strip() or None
+        level = str(query.get("level") or "").strip() or None
+        out_path = str(query.get("path") or "").strip() or None
+        profile = str(query.get("profile") or "").strip() or None
+        try:
+            res.json(
+                runtime.console_messages(
+                    target_id=target_id,
+                    profile=profile,
+                    level=level,
+                    out_path=out_path,
+                )
+            )
+        except BrowserRuntimeError as exc:
+            _handle_runtime_error(res, exc)
+
     def upload_route(req: BrowserRouteRequest, res: BrowserRouteResponse) -> None:
         if not _ensure_supported_target(req, res):
             return
@@ -282,6 +317,8 @@ def register_browser_agent_routes(registrar: BrowserRouteRegistrar, runtime: Bro
     registrar.post("/navigate", navigate_route)
     registrar.get("/snapshot", snapshot_route)
     registrar.post("/screenshot", screenshot_route)
+    registrar.post("/pdf", pdf_route)
+    registrar.get("/console", console_route)
     registrar.post("/hooks/file-chooser", upload_route)
     registrar.post("/hooks/dialog", dialog_route)
     registrar.post("/act", act_route)

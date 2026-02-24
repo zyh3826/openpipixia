@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import patch
 
 from openheron.browser_runtime import (
@@ -12,6 +13,7 @@ from openheron.browser_runtime import (
     InMemoryBrowserRuntime,
     configure_browser_runtime,
     get_browser_runtime,
+    resolve_browser_artifact_path,
     validate_browser_upload_paths,
     validate_browser_url,
 )
@@ -38,6 +40,13 @@ class BrowserRuntimeTests(unittest.TestCase):
             configure_browser_runtime(None)
             runtime = get_browser_runtime()
         self.assertIsInstance(runtime, InMemoryBrowserRuntime)
+
+    def test_playwright_mode_strict_raises_when_adapter_fails(self) -> None:
+        os.environ["OPENHERON_BROWSER_RUNTIME"] = "playwright"
+        os.environ["OPENHERON_BROWSER_RUNTIME_STRICT"] = "1"
+        with patch("openheron.browser_runtime._create_playwright_runtime", side_effect=RuntimeError("boom")):
+            with self.assertRaises(RuntimeError):
+                configure_browser_runtime(None)
 
     def test_playwright_mode_uses_adapter_when_available(self) -> None:
         os.environ["OPENHERON_BROWSER_RUNTIME"] = "playwright"
@@ -78,6 +87,27 @@ class BrowserRuntimeTests(unittest.TestCase):
         runtime = InMemoryBrowserRuntime()
         with self.assertRaises(BrowserRuntimeError):
             runtime.status(profile="unknown")
+
+    def test_in_memory_runtime_status_exposes_capability(self) -> None:
+        runtime = InMemoryBrowserRuntime()
+        status = runtime.status(profile="openheron")
+        self.assertEqual(status["capability"]["backend"], "memory")
+        self.assertIn("act", status["capability"]["supportedActions"])
+        profiles = runtime.profiles()
+        openheron = next(entry for entry in profiles["profiles"] if entry["name"] == "openheron")
+        self.assertEqual(openheron["capability"]["backend"], "memory")
+        self.assertIn("snapshot", openheron["capability"]["supportedActions"])
+
+    def test_resolve_browser_artifact_path_enforces_root(self) -> None:
+        with tempfile.TemporaryDirectory() as root_tmp, tempfile.TemporaryDirectory() as outside_tmp:
+            os.environ["OPENHERON_BROWSER_ARTIFACT_ROOT"] = root_tmp
+            inside = resolve_browser_artifact_path(str(Path(root_tmp) / "a.pdf"), default_filename="x.pdf")
+            self.assertEqual(inside, str((Path(root_tmp) / "a.pdf").resolve()))
+            with self.assertRaises(BrowserRuntimeError):
+                resolve_browser_artifact_path(
+                    str(Path(outside_tmp) / "b.pdf"),
+                    default_filename="x.pdf",
+                )
 
 
 if __name__ == "__main__":

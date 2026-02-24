@@ -10,18 +10,39 @@ from __future__ import annotations
 import base64
 from dataclasses import dataclass
 import ipaddress
+import json
 import os
 import socket
 from typing import Any, Protocol
 from urllib.parse import urlparse
 import uuid
 
+from .browser_schema import apply_status_metadata, make_profile_entry, make_runtime_capability
 from .env_utils import env_enabled
 
 
 _SUPPORTED_SCHEMES = {"http", "https", "about"}
 _LOCAL_HOSTS = {"localhost", "localhost.localdomain"}
 _SUPPORTED_PROFILES = {"openheron", "chrome"}
+_OPENHERON_ACTIONS = [
+    "status",
+    "start",
+    "stop",
+    "profiles",
+    "tabs",
+    "open",
+    "focus",
+    "close",
+    "navigate",
+    "snapshot",
+    "screenshot",
+    "pdf",
+    "console",
+    "upload",
+    "dialog",
+    "act",
+]
+_CHROME_ACTIONS = ["status", "profiles"]
 
 
 @dataclass(slots=True)
@@ -37,9 +58,10 @@ class BrowserTab:
 class BrowserRuntimeError(RuntimeError):
     """Browser runtime error with an HTTP-like status code."""
 
-    def __init__(self, message: str, *, status: int = 400) -> None:
+    def __init__(self, message: str, *, status: int = 400, code: str | None = None) -> None:
         super().__init__(message)
         self.status = status
+        self.code = code
 
 
 class BrowserRuntime(Protocol):
@@ -105,6 +127,25 @@ class BrowserRuntime(Protocol):
         out_path: str | None = None,
     ) -> dict[str, Any]:
         """Capture tab screenshot."""
+
+    def pdf_save(
+        self,
+        *,
+        target_id: str | None = None,
+        profile: str | None = None,
+        out_path: str | None = None,
+    ) -> dict[str, Any]:
+        """Save current page to PDF."""
+
+    def console_messages(
+        self,
+        *,
+        target_id: str | None = None,
+        profile: str | None = None,
+        level: str | None = None,
+        out_path: str | None = None,
+    ) -> dict[str, Any]:
+        """Read console messages for a tab."""
 
     def upload(
         self,
@@ -195,6 +236,31 @@ def _is_within_root(path: str, root: str) -> bool:
         return False
 
 
+def _resolve_artifact_root() -> str:
+    configured = os.getenv("OPENHERON_BROWSER_ARTIFACT_ROOT", "").strip()
+    if configured:
+        return os.path.realpath(os.path.abspath(os.path.expanduser(configured)))
+    workspace = os.getenv("OPENHERON_WORKSPACE", "").strip()
+    base = workspace or os.getcwd()
+    return os.path.realpath(os.path.abspath(os.path.join(base, ".openheron", "browser_artifacts")))
+
+
+def resolve_browser_artifact_path(out_path: str | None, *, default_filename: str) -> str:
+    """Resolve artifact output path with optional root restriction."""
+
+    enforce_root = env_enabled("OPENHERON_BROWSER_ENFORCE_ARTIFACT_ROOT", default=True)
+    artifact_root = _resolve_artifact_root()
+    target_raw = out_path.strip() if out_path else ""
+    if not target_raw:
+        target_path = os.path.join(artifact_root, default_filename)
+    else:
+        target_path = os.path.abspath(os.path.expanduser(target_raw))
+    resolved = os.path.realpath(target_path)
+    if enforce_root and not _is_within_root(resolved, artifact_root):
+        raise BrowserRuntimeError(f"artifact path is outside artifact root: {target_raw or target_path}")
+    return resolved
+
+
 def validate_browser_upload_paths(paths: list[str]) -> list[str]:
     """Validate and normalize upload paths with optional root restriction."""
 
@@ -233,26 +299,51 @@ class InMemoryBrowserRuntime:
         self._running = False
         self._tabs: list[BrowserTab] = []
         self._last_target_id: str | None = None
+        self._console_messages_by_tab: dict[str, list[dict[str, str]]] = {}
 
     def status(self, *, profile: str | None = None) -> dict[str, Any]:
         resolved_profile = self._resolve_profile(profile)
         if resolved_profile == "chrome":
-            return {
+            return apply_status_metadata(
+                {
+                    "enabled": True,
+                    "running": False,
+                    "profile": "chrome",
+                    "tabCount": 0,
+                    "lastTargetId": None,
+                    "driver": "extension-relay",
+                    "available": False,
+                    "capability": make_runtime_capability(
+                        backend="extension-relay",
+                        driver="extension-relay",
+                        mode="unsupported",
+                        attach_mode="cdp-required",
+                        supported_actions=_CHROME_ACTIONS,
+                    ),
+                },
+                attach_mode="cdp-required",
+                browser_owned=False,
+                context_owned=False,
+            )
+        return apply_status_metadata(
+            {
                 "enabled": True,
-                "running": False,
-                "profile": "chrome",
-                "tabCount": 0,
-                "lastTargetId": None,
-                "driver": "extension-relay",
-                "available": False,
-            }
-        return {
-            "enabled": True,
-            "running": self._running,
-            "profile": resolved_profile,
-            "tabCount": len(self._tabs),
-            "lastTargetId": self._last_target_id,
-        }
+                "running": self._running,
+                "profile": resolved_profile,
+                "tabCount": len(self._tabs),
+                "lastTargetId": self._last_target_id,
+                "capability": make_runtime_capability(
+                    backend="memory",
+                    driver="memory",
+                    mode="simulated",
+                    attach_mode="memory-simulated",
+                    supported_actions=_OPENHERON_ACTIONS,
+                ),
+            },
+            attach_mode="memory-simulated",
+            browser_owned=False,
+            context_owned=False,
+        )
 
     def start(self, *, profile: str | None = None) -> dict[str, Any]:
         resolved_profile = self._resolve_profile(profile)
@@ -266,23 +357,49 @@ class InMemoryBrowserRuntime:
         self._running = False
         self._tabs = []
         self._last_target_id = None
+        self._console_messages_by_tab = {}
         return self.status(profile=resolved_profile)
 
     def profiles(self) -> dict[str, Any]:
         return {
             "profiles": [
-                {
-                    "name": "openheron",
-                    "driver": "memory",
-                    "description": "Iteration 0 in-memory browser profile",
-                    "available": True,
-                },
-                {
-                    "name": "chrome",
-                    "driver": "extension-relay",
-                    "description": "Chrome extension relay profile (not implemented yet)",
-                    "available": False,
-                },
+                make_profile_entry(
+                    name="openheron",
+                    driver="memory",
+                    description="Iteration 0 in-memory browser profile",
+                    available=True,
+                    attach_mode="memory-simulated",
+                    ownership_model={
+                        "browser": "not-applicable",
+                        "context": "not-applicable",
+                    },
+                    capability=make_runtime_capability(
+                        backend="memory",
+                        driver="memory",
+                        mode="simulated",
+                        attach_mode="memory-simulated",
+                        supported_actions=_OPENHERON_ACTIONS,
+                    ),
+                ),
+                make_profile_entry(
+                    name="chrome",
+                    driver="extension-relay",
+                    description="Chrome extension relay profile (not implemented yet)",
+                    available=False,
+                    attach_mode="cdp-required",
+                    requires={"OPENHERON_BROWSER_CHROME_CDP_URL": True},
+                    ownership_model={
+                        "browser": "borrowed",
+                        "context": "borrowed-or-owned-if-created",
+                    },
+                    capability=make_runtime_capability(
+                        backend="extension-relay",
+                        driver="extension-relay",
+                        mode="unsupported",
+                        attach_mode="cdp-required",
+                        supported_actions=_CHROME_ACTIONS,
+                    ),
+                ),
             ]
         }
 
@@ -321,6 +438,7 @@ class InMemoryBrowserRuntime:
         )
         self._tabs.append(tab)
         self._last_target_id = tab.target_id
+        self._record_console_message(tab.target_id, "info", f"opened {url}")
         return {
             "ok": True,
             "profile": resolved_profile,
@@ -334,6 +452,7 @@ class InMemoryBrowserRuntime:
         self._ensure_profile_supported(resolved_profile)
         tab = self._resolve_tab(target_id)
         self._last_target_id = tab.target_id
+        self._record_console_message(tab.target_id, "debug", "tab focused")
         return {
             "ok": True,
             "profile": resolved_profile,
@@ -347,6 +466,7 @@ class InMemoryBrowserRuntime:
         self._ensure_profile_supported(resolved_profile)
         tab = self._resolve_tab(target_id)
         self._tabs = [entry for entry in self._tabs if entry.target_id != tab.target_id]
+        self._console_messages_by_tab.pop(tab.target_id, None)
         self._last_target_id = self._tabs[-1].target_id if self._tabs else None
         return {
             "ok": True,
@@ -407,6 +527,7 @@ class InMemoryBrowserRuntime:
         tab.url = url
         tab.title = f"OpenHeron: {url}"
         self._last_target_id = tab.target_id
+        self._record_console_message(tab.target_id, "info", f"navigated to {url}")
         return {
             "ok": True,
             "profile": resolved_profile,
@@ -428,19 +549,38 @@ class InMemoryBrowserRuntime:
         kind = str(request.get("kind", "")).strip()
         if not kind:
             raise BrowserRuntimeError("request.kind is required")
-        if kind not in {"click", "type", "press", "wait", "close"}:
+        if kind not in {"click", "type", "press", "wait", "close", "hover", "select", "evaluate", "fill", "resize", "drag"}:
             raise BrowserRuntimeError(f"unsupported act kind: {kind}")
         selector = str(request.get("selector", "")).strip()
         ref = str(request.get("ref", "")).strip()
-        if kind in {"click", "type"} and not (selector or ref):
-            raise BrowserRuntimeError("request.selector or request.ref is required for click/type")
+        if kind in {"click", "type", "hover", "select"} and not (selector or ref):
+            raise BrowserRuntimeError("request.selector or request.ref is required for click/type/hover/select")
         if kind == "type" and not isinstance(request.get("text"), str):
             raise BrowserRuntimeError("request.text is required for type")
         if kind == "press" and not str(request.get("key", "")).strip():
             raise BrowserRuntimeError("request.key is required for press")
+        if kind == "select":
+            values = request.get("values")
+            if not isinstance(values, list) or not values:
+                raise BrowserRuntimeError("request.values is required for select")
+        if kind == "evaluate" and not str(request.get("fn", "")).strip():
+            raise BrowserRuntimeError("request.fn is required for evaluate")
+        if kind == "fill":
+            fields = request.get("fields")
+            if not isinstance(fields, list) or not fields:
+                raise BrowserRuntimeError("request.fields is required for fill")
+        if kind == "resize":
+            if not isinstance(request.get("width"), (int, float)) or not isinstance(request.get("height"), (int, float)):
+                raise BrowserRuntimeError("request.width and request.height are required for resize")
+        if kind == "drag":
+            start_ref = str(request.get("startRef", "")).strip() or str(request.get("startSelector", "")).strip()
+            end_ref = str(request.get("endRef", "")).strip() or str(request.get("endSelector", "")).strip()
+            if not start_ref or not end_ref:
+                raise BrowserRuntimeError("request.startRef/startSelector and request.endRef/endSelector are required for drag")
 
         if kind == "close":
             self._tabs = [entry for entry in self._tabs if entry.target_id != tab.target_id]
+            self._console_messages_by_tab.pop(tab.target_id, None)
             self._last_target_id = self._tabs[-1].target_id if self._tabs else None
             return {
                 "ok": True,
@@ -449,6 +589,7 @@ class InMemoryBrowserRuntime:
                 "closed": True,
             }
         self._last_target_id = tab.target_id
+        self._record_console_message(tab.target_id, "info", f"act:{kind}")
         return {
             "ok": True,
             "profile": resolved_profile,
@@ -480,7 +621,8 @@ class InMemoryBrowserRuntime:
         binary = base64.b64decode(data)
         saved_path: str | None = None
         if out_path and out_path.strip():
-            target_path = os.path.abspath(out_path.strip())
+            default_name = f"{tab.target_id}.{'png' if fmt == 'png' else 'jpg'}"
+            target_path = resolve_browser_artifact_path(out_path, default_filename=default_name)
             dirpath = os.path.dirname(target_path) or "."
             os.makedirs(dirpath, exist_ok=True)
             with open(target_path, "wb") as f:
@@ -496,6 +638,75 @@ class InMemoryBrowserRuntime:
             "contentType": content_type,
             "imageBase64": data,
             "bytes": len(binary),
+            "path": saved_path,
+        }
+
+    def pdf_save(
+        self,
+        *,
+        target_id: str | None = None,
+        profile: str | None = None,
+        out_path: str | None = None,
+    ) -> dict[str, Any]:
+        resolved_profile = self._resolve_profile(profile)
+        self._ensure_profile_supported(resolved_profile)
+        tab = self._resolve_tab(target_id)
+        pdf_bytes = (
+            b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n"
+        )
+        target_path = resolve_browser_artifact_path(out_path, default_filename=f"{tab.target_id}.pdf")
+        os.makedirs(os.path.dirname(target_path) or ".", exist_ok=True)
+        with open(target_path, "wb") as f:
+            f.write(pdf_bytes)
+        self._last_target_id = tab.target_id
+        return {
+            "ok": True,
+            "profile": resolved_profile,
+            "targetId": tab.target_id,
+            "url": tab.url,
+            "path": target_path,
+            "bytes": len(pdf_bytes),
+            "contentType": "application/pdf",
+        }
+
+    def console_messages(
+        self,
+        *,
+        target_id: str | None = None,
+        profile: str | None = None,
+        level: str | None = None,
+        out_path: str | None = None,
+    ) -> dict[str, Any]:
+        resolved_profile = self._resolve_profile(profile)
+        self._ensure_profile_supported(resolved_profile)
+        tab = self._resolve_tab(target_id)
+        normalized_level = (level or "").strip().lower() or "info"
+        self._last_target_id = tab.target_id
+        messages = list(self._console_messages_by_tab.get(tab.target_id, []))
+        level_filter = (level or "").strip().lower()
+        if level_filter:
+            messages = [entry for entry in messages if entry.get("level", "").lower() == level_filter]
+        if not messages:
+            messages = [
+                {
+                    "level": normalized_level,
+                    "text": f"console capture is synthetic in memory runtime ({tab.url})",
+                }
+            ]
+        saved_path: str | None = None
+        if out_path and out_path.strip():
+            saved_path = resolve_browser_artifact_path(
+                out_path,
+                default_filename=f"{tab.target_id}.console.json",
+            )
+            os.makedirs(os.path.dirname(saved_path) or ".", exist_ok=True)
+            with open(saved_path, "w", encoding="utf-8") as f:
+                json.dump({"messages": messages}, f, ensure_ascii=False, indent=2)
+        return {
+            "ok": True,
+            "profile": resolved_profile,
+            "targetId": tab.target_id,
+            "messages": messages,
             "path": saved_path,
         }
 
@@ -551,6 +762,12 @@ class InMemoryBrowserRuntime:
         if profile == "chrome":
             raise BrowserRuntimeError('profile "chrome" is not implemented yet', status=501)
 
+    def _record_console_message(self, target_id: str, level: str, text: str) -> None:
+        bucket = self._console_messages_by_tab.setdefault(target_id, [])
+        bucket.append({"level": level.strip().lower() or "info", "text": text})
+        if len(bucket) > 100:
+            del bucket[:-100]
+
     def _resolve_tab(self, target_id: str | None) -> BrowserTab:
         if not self._running:
             raise BrowserRuntimeError("browser is not running; call action=start first", status=409)
@@ -591,6 +808,8 @@ def _create_runtime_from_env() -> BrowserRuntime:
         try:
             return _create_playwright_runtime()
         except Exception:
+            if env_enabled("OPENHERON_BROWSER_RUNTIME_STRICT", default=False):
+                raise
             return InMemoryBrowserRuntime()
     return InMemoryBrowserRuntime()
 

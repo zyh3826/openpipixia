@@ -15,6 +15,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.error import URLError
 
+from openheron.browser_service import BrowserDispatchResponse
 from openheron.runtime.tool_context import route_context
 from openheron.tools import (
     SubagentSpawnRequest,
@@ -553,6 +554,7 @@ class ToolsTests(unittest.TestCase):
         self.assertIn("example.org", navigated["url"])
 
         with tempfile.TemporaryDirectory() as tmp:
+            os.environ["OPENHERON_BROWSER_ARTIFACT_ROOT"] = tmp
             shot_path = Path(tmp) / "shots" / "shot.png"
             screenshot = json.loads(
                 browser(
@@ -569,6 +571,89 @@ class ToolsTests(unittest.TestCase):
             self.assertIn("jpeg", screenshot["contentType"])
             self.assertEqual(Path(screenshot["path"]).resolve(), shot_path.resolve())
             self.assertTrue(shot_path.exists())
+
+            os.environ["OPENHERON_BROWSER_ARTIFACT_ROOT"] = tmp
+            pdf_path = Path(tmp) / "pdfs" / "shot.pdf"
+            pdf = json.loads(
+                browser(
+                    action="pdf",
+                    target_id=target_id,
+                    pdf_path=str(pdf_path),
+                )
+            )
+            self.assertTrue(pdf["ok"])
+            self.assertEqual(Path(pdf["path"]).resolve(), pdf_path.resolve())
+            self.assertTrue(pdf_path.exists())
+
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["OPENHERON_BROWSER_ARTIFACT_ROOT"] = tmp
+            console_path = Path(tmp) / "console" / "tool.json"
+            console = json.loads(
+                browser(
+                    action="console",
+                    target_id=target_id,
+                    console_level="info",
+                    console_path=str(console_path),
+                )
+            )
+            self.assertTrue(console["ok"])
+            self.assertIn("messages", console)
+            self.assertTrue(console["messages"])
+            self.assertEqual(console["messages"][0]["level"], "info")
+            self.assertEqual(Path(console["path"]).resolve(), console_path.resolve())
+            self.assertTrue(console_path.exists())
+
+    def test_browser_tool_blocks_pdf_outside_artifact_root(self) -> None:
+        with tempfile.TemporaryDirectory() as root_tmp, tempfile.TemporaryDirectory() as outside_tmp:
+            os.environ["OPENHERON_BROWSER_ARTIFACT_ROOT"] = root_tmp
+            json.loads(browser(action="start"))
+            opened = json.loads(browser(action="open", target_url="https://example.com"))
+            target_id = opened["targetId"]
+            outside_pdf = Path(outside_tmp) / "outside.pdf"
+            payload = json.loads(
+                browser(
+                    action="pdf",
+                    target_id=target_id,
+                    pdf_path=str(outside_pdf),
+                )
+            )
+            self.assertFalse(payload["ok"])
+            self.assertIn("outside artifact root", payload["error"])
+
+    def test_browser_tool_blocks_screenshot_outside_artifact_root(self) -> None:
+        with tempfile.TemporaryDirectory() as root_tmp, tempfile.TemporaryDirectory() as outside_tmp:
+            os.environ["OPENHERON_BROWSER_ARTIFACT_ROOT"] = root_tmp
+            json.loads(browser(action="start"))
+            opened = json.loads(browser(action="open", target_url="https://example.com"))
+            target_id = opened["targetId"]
+            outside_png = Path(outside_tmp) / "outside.png"
+            payload = json.loads(
+                browser(
+                    action="screenshot",
+                    target_id=target_id,
+                    screenshot_path=str(outside_png),
+                )
+            )
+            self.assertFalse(payload["ok"])
+            self.assertIn("outside artifact root", payload["error"])
+
+    def test_browser_tool_blocks_console_export_outside_artifact_root(self) -> None:
+        with tempfile.TemporaryDirectory() as root_tmp, tempfile.TemporaryDirectory() as outside_tmp:
+            os.environ["OPENHERON_BROWSER_ARTIFACT_ROOT"] = root_tmp
+            json.loads(browser(action="start"))
+            opened = json.loads(browser(action="open", target_url="https://example.com"))
+            target_id = opened["targetId"]
+            outside_json = Path(outside_tmp) / "outside.json"
+            payload = json.loads(
+                browser(
+                    action="console",
+                    target_id=target_id,
+                    console_level="info",
+                    console_path=str(outside_json),
+                )
+            )
+            self.assertFalse(payload["ok"])
+            self.assertIn("outside artifact root", payload["error"])
 
         with tempfile.TemporaryDirectory() as tmp:
             upload_file = Path(tmp) / "upload.txt"
@@ -616,6 +701,68 @@ class ToolsTests(unittest.TestCase):
         self.assertTrue(acted_with_selector["ok"])
         self.assertEqual(acted_with_selector["kind"], "click")
 
+        hovered = json.loads(
+            browser(
+                action="act",
+                target_id=target_id,
+                request=json.dumps({"kind": "hover", "ref": "e1"}),
+            )
+        )
+        self.assertTrue(hovered["ok"])
+        self.assertEqual(hovered["kind"], "hover")
+
+        selected = json.loads(
+            browser(
+                action="act",
+                target_id=target_id,
+                request=json.dumps({"kind": "select", "ref": "e2", "values": ["v1"]}),
+            )
+        )
+        self.assertTrue(selected["ok"])
+        self.assertEqual(selected["kind"], "select")
+
+        evaluated = json.loads(
+            browser(
+                action="act",
+                target_id=target_id,
+                request=json.dumps({"kind": "evaluate", "fn": "() => 1"}),
+            )
+        )
+        self.assertTrue(evaluated["ok"])
+        self.assertEqual(evaluated["kind"], "evaluate")
+
+        filled = json.loads(
+            browser(
+                action="act",
+                target_id=target_id,
+                request=json.dumps(
+                    {"kind": "fill", "fields": [{"ref": "e2", "text": "abc"}]}
+                ),
+            )
+        )
+        self.assertTrue(filled["ok"])
+        self.assertEqual(filled["kind"], "fill")
+
+        resized = json.loads(
+            browser(
+                action="act",
+                target_id=target_id,
+                request=json.dumps({"kind": "resize", "width": 1024, "height": 768}),
+            )
+        )
+        self.assertTrue(resized["ok"])
+        self.assertEqual(resized["kind"], "resize")
+
+        dragged = json.loads(
+            browser(
+                action="act",
+                target_id=target_id,
+                request=json.dumps({"kind": "drag", "startRef": "e1", "endRef": "e2"}),
+            )
+        )
+        self.assertTrue(dragged["ok"])
+        self.assertEqual(dragged["kind"], "drag")
+
         closed = json.loads(browser(action="close", target_id=target_id))
         self.assertTrue(closed["ok"])
         self.assertTrue(closed["closed"])
@@ -633,6 +780,20 @@ class ToolsTests(unittest.TestCase):
         self.assertFalse(missing_request["ok"])
         self.assertIn("kind", missing_request["error"])
 
+        json.loads(browser(action="start"))
+        json.loads(browser(action="open", target_url="https://example.com"))
+        missing_select_values = json.loads(
+            browser(action="act", request=json.dumps({"kind": "select", "ref": "e1"}))
+        )
+        self.assertFalse(missing_select_values["ok"])
+        self.assertIn("values", missing_select_values["error"])
+
+        missing_fill_fields = json.loads(
+            browser(action="act", request=json.dumps({"kind": "fill"}))
+        )
+        self.assertFalse(missing_fill_fields["ok"])
+        self.assertIn("fields", missing_fill_fields["error"])
+
         missing_navigate_url = json.loads(browser(action="navigate", target_id="tab-x"))
         self.assertFalse(missing_navigate_url["ok"])
         self.assertIn("url", missing_navigate_url["error"])
@@ -645,8 +806,6 @@ class ToolsTests(unittest.TestCase):
         self.assertFalse(missing_dialog_accept["ok"])
         self.assertIn("accept", missing_dialog_accept["error"])
 
-        json.loads(browser(action="start"))
-        json.loads(browser(action="open", target_url="https://example.com"))
         invalid_screenshot_type = json.loads(browser(action="screenshot", screenshot_type="gif"))
         self.assertFalse(invalid_screenshot_type["ok"])
         self.assertIn("image_type", invalid_screenshot_type["error"])
@@ -669,6 +828,36 @@ class ToolsTests(unittest.TestCase):
         stopped = json.loads(browser(action="stop"))
         self.assertFalse(stopped["running"])
         self.assertEqual(stopped["tabCount"], 0)
+
+    def test_browser_tool_profiles_attach_compatibility_aliases(self) -> None:
+        class _FakeBrowserService:
+            def dispatch(self, _request: object) -> BrowserDispatchResponse:
+                return BrowserDispatchResponse(
+                    200,
+                    {
+                        "profiles": [
+                            {
+                                "name": "openheron",
+                                "attachMode": "launch-or-cdp",
+                                "ownershipModel": {"browser": "owned"},
+                                "requires": {"OPENHERON_BROWSER_CDP_URL": False},
+                                "capability": {
+                                    "backend": "playwright",
+                                    "attachMode": "launch-or-cdp",
+                                    "supportedActions": ["status", "snapshot"],
+                                },
+                            }
+                        ]
+                    },
+                )
+
+        with patch("openheron.tools.get_browser_control_service", return_value=_FakeBrowserService()):
+            payload = json.loads(browser(action="profiles"))
+        self.assertEqual(payload["profiles"][0]["attach_mode"], "launch-or-cdp")
+        self.assertIn("ownership_model", payload["profiles"][0])
+        self.assertIn("requirements", payload["profiles"][0])
+        self.assertEqual(payload["profiles"][0]["capability"]["attach_mode"], "launch-or-cdp")
+        self.assertEqual(payload["profiles"][0]["capability"]["supported_actions"], ["status", "snapshot"])
 
     def test_browser_tool_rejects_unsupported_profile_actions(self) -> None:
         unsupported = json.loads(browser(action="start", profile="chrome"))
@@ -764,6 +953,394 @@ class ToolsTests(unittest.TestCase):
         self.assertIn("sandbox-proxy.local:9797", captured["url"])
         self.assertEqual(captured["token"], "shared-token")
 
+    def test_browser_tool_blocks_unsupported_action_by_proxy_capability(self) -> None:
+        os.environ["OPENHERON_BROWSER_NODE_PROXY_URL"] = "http://proxy.local:8787"
+        os.environ["OPENHERON_BROWSER_NODE_CAPABILITY_JSON"] = json.dumps(
+            {"capability": {"supportedActions": ["status", "snapshot"]}}
+        )
+        with patch("openheron.tools.urlopen") as mocked_urlopen:
+            payload = json.loads(browser(action="pdf", target="node"))
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["status"], 501)
+        self.assertIn("not supported", payload["error"])
+        self.assertIn("status", payload["supportedActions"])
+        self.assertIn("action=status", payload["hint"])
+        mocked_urlopen.assert_not_called()
+
+    def test_browser_tool_unsupported_action_includes_capability_warnings(self) -> None:
+        os.environ["OPENHERON_BROWSER_NODE_PROXY_URL"] = "http://proxy.local:8787"
+        os.environ["OPENHERON_BROWSER_NODE_CAPABILITY_JSON"] = json.dumps(
+            {
+                "capability": {
+                    "supportedActions": ["status"],
+                    "errorCodes": "bad-shape",
+                }
+            }
+        )
+        with patch("openheron.tools.urlopen") as mocked_urlopen:
+            payload = json.loads(browser(action="pdf", target="node"))
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["status"], 501)
+        self.assertIn("capabilityWarnings", payload)
+        self.assertIn("errorCodes", payload["capabilityWarnings"][0])
+        mocked_urlopen.assert_not_called()
+
+    def test_browser_tool_allows_supported_action_by_proxy_capability(self) -> None:
+        class _DummyResponse:
+            def __init__(self, payload: str) -> None:
+                self._payload = payload
+
+            def read(self) -> bytes:
+                return self._payload.encode("utf-8")
+
+            def __enter__(self) -> "_DummyResponse":
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+        os.environ["OPENHERON_BROWSER_NODE_PROXY_URL"] = "http://proxy.local:8787"
+        os.environ["OPENHERON_BROWSER_NODE_CAPABILITY_JSON"] = json.dumps(
+            {"supportedActions": ["status", "snapshot"]}
+        )
+        with patch("openheron.tools.urlopen", return_value=_DummyResponse('{"ok":true}')) as mocked_urlopen:
+            payload = json.loads(browser(action="status", target="node"))
+        self.assertTrue(payload["ok"])
+        mocked_urlopen.assert_called_once()
+
+    def test_browser_tool_injects_proxy_capability_into_response(self) -> None:
+        class _DummyResponse:
+            def __init__(self, payload: str) -> None:
+                self._payload = payload
+
+            def read(self) -> bytes:
+                return self._payload.encode("utf-8")
+
+            def __enter__(self) -> "_DummyResponse":
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+        os.environ["OPENHERON_BROWSER_NODE_PROXY_URL"] = "http://proxy.local:8787"
+        os.environ["OPENHERON_BROWSER_NODE_CAPABILITY_JSON"] = json.dumps(
+            {"capability": {"backend": "node-proxy", "attachMode": "remote", "supportedActions": ["status"]}}
+        )
+        with patch("openheron.tools.urlopen", return_value=_DummyResponse('{"ok":true}')):
+            payload = json.loads(browser(action="status", target="node"))
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["target"], "node")
+        self.assertEqual(payload["capability"]["backend"], "node-proxy")
+        self.assertEqual(payload["capability"]["attach_mode"], "remote")
+
+    def test_browser_tool_keeps_response_capability_if_proxy_already_provides(self) -> None:
+        class _DummyResponse:
+            def __init__(self, payload: str) -> None:
+                self._payload = payload
+
+            def read(self) -> bytes:
+                return self._payload.encode("utf-8")
+
+            def __enter__(self) -> "_DummyResponse":
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+        os.environ["OPENHERON_BROWSER_NODE_PROXY_URL"] = "http://proxy.local:8787"
+        os.environ["OPENHERON_BROWSER_NODE_CAPABILITY_JSON"] = json.dumps(
+            {"capability": {"backend": "node-proxy", "supportedActions": ["status"]}}
+        )
+        with patch(
+            "openheron.tools.urlopen",
+            return_value=_DummyResponse('{"ok":true,"capability":{"backend":"proxy-inline","attachMode":"inline"}}'),
+        ):
+            payload = json.loads(browser(action="status", target="node"))
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["capability"]["backend"], "proxy-inline")
+        self.assertEqual(payload["capability"]["attach_mode"], "inline")
+
+    def test_browser_tool_status_includes_default_proxy_capability_schema(self) -> None:
+        class _DummyResponse:
+            def __init__(self, payload: str) -> None:
+                self._payload = payload
+
+            def read(self) -> bytes:
+                return self._payload.encode("utf-8")
+
+            def __enter__(self) -> "_DummyResponse":
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+        os.environ["OPENHERON_BROWSER_NODE_PROXY_URL"] = "http://proxy.local:8787"
+        with patch("openheron.tools.urlopen", return_value=_DummyResponse('{"ok":true}')):
+            payload = json.loads(browser(action="status", target="node"))
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["target"], "node")
+        self.assertEqual(payload["capability"]["backend"], "node-proxy")
+        self.assertEqual(payload["capability"]["supported_actions"], [])
+        self.assertIn("proxy_timeout", payload["capability"]["error_codes"])
+
+    def test_browser_tool_warns_on_invalid_proxy_capability_json(self) -> None:
+        class _DummyResponse:
+            def __init__(self, payload: str) -> None:
+                self._payload = payload
+
+            def read(self) -> bytes:
+                return self._payload.encode("utf-8")
+
+            def __enter__(self) -> "_DummyResponse":
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+        os.environ["OPENHERON_BROWSER_NODE_PROXY_URL"] = "http://proxy.local:8787"
+        os.environ["OPENHERON_BROWSER_NODE_CAPABILITY_JSON"] = '{"capability":'
+        with patch("openheron.tools.urlopen", return_value=_DummyResponse('{"ok":true}')):
+            payload = json.loads(browser(action="status", target="node"))
+        self.assertTrue(payload["ok"])
+        self.assertIn("capabilityWarnings", payload)
+        self.assertIn("capability_warnings", payload)
+        self.assertIn("invalid JSON", payload["capabilityWarnings"][0])
+
+    def test_browser_tool_warns_on_invalid_proxy_error_codes_shape(self) -> None:
+        class _DummyResponse:
+            def __init__(self, payload: str) -> None:
+                self._payload = payload
+
+            def read(self) -> bytes:
+                return self._payload.encode("utf-8")
+
+            def __enter__(self) -> "_DummyResponse":
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+        os.environ["OPENHERON_BROWSER_NODE_PROXY_URL"] = "http://proxy.local:8787"
+        os.environ["OPENHERON_BROWSER_NODE_CAPABILITY_JSON"] = json.dumps(
+            {"capability": {"backend": "node-proxy", "supportedActions": ["status"], "errorCodes": "bad-shape"}}
+        )
+        with patch("openheron.tools.urlopen", return_value=_DummyResponse('{"ok":true}')):
+            payload = json.loads(browser(action="status", target="node"))
+        self.assertTrue(payload["ok"])
+        self.assertIn("capabilityWarnings", payload)
+        self.assertIn("errorCodes", payload["capabilityWarnings"][0])
+        self.assertIn("proxy_timeout", payload["capability"]["error_codes"])
+
+    def test_browser_tool_profiles_includes_capability_warnings_alias(self) -> None:
+        class _DummyResponse:
+            def __init__(self, payload: str) -> None:
+                self._payload = payload
+
+            def read(self) -> bytes:
+                return self._payload.encode("utf-8")
+
+            def __enter__(self) -> "_DummyResponse":
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+        os.environ["OPENHERON_BROWSER_NODE_PROXY_URL"] = "http://proxy.local:8787"
+        os.environ["OPENHERON_BROWSER_NODE_CAPABILITY_JSON"] = '{"capability":'
+        with patch("openheron.tools.urlopen", return_value=_DummyResponse('{"ok":true}')):
+            payload = json.loads(browser(action="profiles", target="node"))
+        self.assertTrue(payload["ok"])
+        self.assertIn("capabilityWarnings", payload)
+        self.assertIn("capability_warnings", payload)
+        self.assertTrue(isinstance(payload.get("profiles"), list))
+
+    def test_browser_tool_status_exposes_recommended_actions_from_capability(self) -> None:
+        class _DummyResponse:
+            def __init__(self, payload: str) -> None:
+                self._payload = payload
+
+            def read(self) -> bytes:
+                return self._payload.encode("utf-8")
+
+            def __enter__(self) -> "_DummyResponse":
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+        os.environ["OPENHERON_BROWSER_NODE_PROXY_URL"] = "http://proxy.local:8787"
+        os.environ["OPENHERON_BROWSER_NODE_CAPABILITY_JSON"] = json.dumps(
+            {"capability": {"supportedActions": ["status", "snapshot", "tabs"]}}
+        )
+        with patch("openheron.tools.urlopen", return_value=_DummyResponse('{"ok":true}')):
+            payload = json.loads(browser(action="status", target="node"))
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["supportedActions"], ["status", "tabs", "snapshot"])
+        self.assertEqual(payload["recommendedActions"], ["status", "tabs", "snapshot"])
+
+    def test_browser_tool_recommended_actions_follow_priority_and_cap(self) -> None:
+        class _DummyResponse:
+            def __init__(self, payload: str) -> None:
+                self._payload = payload
+
+            def read(self) -> bytes:
+                return self._payload.encode("utf-8")
+
+            def __enter__(self) -> "_DummyResponse":
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+        os.environ["OPENHERON_BROWSER_NODE_PROXY_URL"] = "http://proxy.local:8787"
+        os.environ["OPENHERON_BROWSER_NODE_CAPABILITY_JSON"] = json.dumps(
+            {
+                "capability": {
+                    "supportedActions": [
+                        "pdf",
+                        "status",
+                        "dialog",
+                        "snapshot",
+                        "tabs",
+                        "profiles",
+                        "open",
+                        "custom-z",
+                    ]
+                }
+            }
+        )
+        with patch("openheron.tools.urlopen", return_value=_DummyResponse('{"ok":true}')):
+            payload = json.loads(browser(action="status", target="node"))
+        self.assertTrue(payload["ok"])
+        self.assertEqual(
+            payload["supportedActions"],
+            ["status", "profiles", "tabs", "snapshot", "open", "pdf", "dialog", "custom-z"],
+        )
+        self.assertEqual(payload["recommendedActions"], ["status", "profiles", "tabs", "snapshot", "open"])
+
+    def test_browser_tool_recommended_actions_limit_from_env(self) -> None:
+        class _DummyResponse:
+            def __init__(self, payload: str) -> None:
+                self._payload = payload
+
+            def read(self) -> bytes:
+                return self._payload.encode("utf-8")
+
+            def __enter__(self) -> "_DummyResponse":
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+        os.environ["OPENHERON_BROWSER_NODE_PROXY_URL"] = "http://proxy.local:8787"
+        os.environ["OPENHERON_BROWSER_RECOMMENDED_ACTIONS_LIMIT"] = "2"
+        os.environ["OPENHERON_BROWSER_NODE_CAPABILITY_JSON"] = json.dumps(
+            {"capability": {"supportedActions": ["status", "profiles", "tabs", "snapshot"]}}
+        )
+        with patch("openheron.tools.urlopen", return_value=_DummyResponse('{"ok":true}')):
+            payload = json.loads(browser(action="status", target="node"))
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["recommendedActions"], ["status", "profiles"])
+
+    def test_browser_tool_recommended_actions_limit_invalid_uses_default(self) -> None:
+        class _DummyResponse:
+            def __init__(self, payload: str) -> None:
+                self._payload = payload
+
+            def read(self) -> bytes:
+                return self._payload.encode("utf-8")
+
+            def __enter__(self) -> "_DummyResponse":
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+        os.environ["OPENHERON_BROWSER_NODE_PROXY_URL"] = "http://proxy.local:8787"
+        os.environ["OPENHERON_BROWSER_RECOMMENDED_ACTIONS_LIMIT"] = "bad-value"
+        os.environ["OPENHERON_BROWSER_NODE_CAPABILITY_JSON"] = json.dumps(
+            {"capability": {"supportedActions": ["status", "profiles", "tabs", "snapshot", "open", "pdf"]}}
+        )
+        with patch("openheron.tools.urlopen", return_value=_DummyResponse('{"ok":true}')):
+            payload = json.loads(browser(action="status", target="node"))
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["recommendedActions"], ["status", "profiles", "tabs", "snapshot", "open"])
+
+    def test_browser_tool_recommended_actions_order_from_env(self) -> None:
+        class _DummyResponse:
+            def __init__(self, payload: str) -> None:
+                self._payload = payload
+
+            def read(self) -> bytes:
+                return self._payload.encode("utf-8")
+
+            def __enter__(self) -> "_DummyResponse":
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+        os.environ["OPENHERON_BROWSER_NODE_PROXY_URL"] = "http://proxy.local:8787"
+        os.environ["OPENHERON_BROWSER_RECOMMENDED_ACTIONS_ORDER_JSON"] = json.dumps(
+            ["pdf", "snapshot", "status"]
+        )
+        os.environ["OPENHERON_BROWSER_NODE_CAPABILITY_JSON"] = json.dumps(
+            {"capability": {"supportedActions": ["status", "profiles", "snapshot", "pdf"]}}
+        )
+        with patch("openheron.tools.urlopen", return_value=_DummyResponse('{"ok":true}')):
+            payload = json.loads(browser(action="status", target="node"))
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["supportedActions"], ["pdf", "snapshot", "status", "profiles"])
+        self.assertEqual(payload["recommendedActions"], ["pdf", "snapshot", "status", "profiles"])
+        self.assertEqual(payload["capability"]["recommended_order"], ["pdf", "snapshot", "status"])
+
+    def test_browser_tool_recommended_actions_order_invalid_uses_default(self) -> None:
+        class _DummyResponse:
+            def __init__(self, payload: str) -> None:
+                self._payload = payload
+
+            def read(self) -> bytes:
+                return self._payload.encode("utf-8")
+
+            def __enter__(self) -> "_DummyResponse":
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+        os.environ["OPENHERON_BROWSER_NODE_PROXY_URL"] = "http://proxy.local:8787"
+        os.environ["OPENHERON_BROWSER_RECOMMENDED_ACTIONS_ORDER_JSON"] = '{"bad":"shape"}'
+        os.environ["OPENHERON_BROWSER_NODE_CAPABILITY_JSON"] = json.dumps(
+            {"capability": {"supportedActions": ["status", "profiles", "snapshot"]}}
+        )
+        with patch("openheron.tools.urlopen", return_value=_DummyResponse('{"ok":true}')):
+            payload = json.loads(browser(action="status", target="node"))
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["supportedActions"], ["status", "profiles", "snapshot"])
+
+    def test_browser_tool_profiles_includes_default_proxy_schema(self) -> None:
+        class _DummyResponse:
+            def __init__(self, payload: str) -> None:
+                self._payload = payload
+
+            def read(self) -> bytes:
+                return self._payload.encode("utf-8")
+
+            def __enter__(self) -> "_DummyResponse":
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:
+                return None
+
+        os.environ["OPENHERON_BROWSER_SANDBOX_PROXY_URL"] = "http://sandbox-proxy.local:9797"
+        with patch("openheron.tools.urlopen", return_value=_DummyResponse('{"ok":true}')):
+            payload = json.loads(browser(action="profiles", target="sandbox"))
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["target"], "sandbox")
+        self.assertEqual(payload["capability"]["backend"], "sandbox-proxy")
+        self.assertIn("proxy_timeout", payload["capability"]["error_codes"])
+        self.assertEqual(payload["profiles"], [])
+
     def test_browser_tool_rejects_node_param_without_node_target(self) -> None:
         payload = json.loads(browser(action="status", target="host", node="node-1"))
         self.assertFalse(payload["ok"])
@@ -775,6 +1352,41 @@ class ToolsTests(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertEqual(payload["status"], 400)
         self.assertIn("timeout_ms", payload["error"])
+
+    def test_browser_tool_adds_profile_switch_hint_on_mismatch(self) -> None:
+        class _DummyService:
+            def dispatch(self, _request):
+                return BrowserDispatchResponse(
+                    status=409,
+                    body={"ok": False, "error": "profile mismatch: active profile is openheron"},
+                )
+
+        with patch("openheron.tools.get_browser_control_service", return_value=_DummyService()):
+            payload = json.loads(browser(action="status"))
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["status"], 409)
+        self.assertEqual(payload["errorCode"], "browser_conflict")
+        self.assertIn("hint", payload)
+        self.assertIn("action=stop", payload["hint"])
+
+    def test_browser_tool_preserves_existing_error_code_from_service(self) -> None:
+        class _DummyService:
+            def dispatch(self, _request):
+                return BrowserDispatchResponse(
+                    status=503,
+                    body={
+                        "ok": False,
+                        "status": 503,
+                        "error": "chrome relay timeout",
+                        "errorCode": "relay_timeout",
+                    },
+                )
+
+        with patch("openheron.tools.get_browser_control_service", return_value=_DummyService()):
+            payload = json.loads(browser(action="status"))
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["status"], 503)
+        self.assertEqual(payload["errorCode"], "relay_timeout")
 
     def test_browser_tool_handles_proxy_non_json_response(self) -> None:
         class _DummyResponse:
@@ -792,6 +1404,7 @@ class ToolsTests(unittest.TestCase):
             payload = json.loads(browser(action="status", target="node"))
         self.assertFalse(payload["ok"])
         self.assertEqual(payload["status"], 502)
+        self.assertEqual(payload["errorCode"], "proxy_invalid_json")
         self.assertIn("invalid proxy response", payload["error"])
 
     def test_browser_tool_uses_structured_proxy_error_payload(self) -> None:
@@ -808,6 +1421,7 @@ class ToolsTests(unittest.TestCase):
         self.assertFalse(payload["ok"])
         self.assertEqual(payload["status"], 429)
         self.assertEqual(payload["error"], "rate limited")
+        self.assertEqual(payload["errorCode"], "proxy_http_error")
 
     def test_browser_tool_maps_proxy_timeout_error(self) -> None:
         os.environ["OPENHERON_BROWSER_NODE_PROXY_URL"] = "http://proxy.local:8787"
@@ -815,6 +1429,7 @@ class ToolsTests(unittest.TestCase):
             payload = json.loads(browser(action="status", target="node"))
         self.assertFalse(payload["ok"])
         self.assertEqual(payload["status"], 504)
+        self.assertEqual(payload["errorCode"], "proxy_timeout")
         self.assertIn("timeout", payload["error"])
 
     def test_browser_tool_maps_proxy_connection_refused_error(self) -> None:
@@ -823,7 +1438,35 @@ class ToolsTests(unittest.TestCase):
             payload = json.loads(browser(action="status", target="node"))
         self.assertFalse(payload["ok"])
         self.assertEqual(payload["status"], 503)
+        self.assertEqual(payload["errorCode"], "proxy_connection_refused")
         self.assertIn("connection refused", payload["error"])
+
+    def test_browser_tool_proxy_http_error_includes_target_capability(self) -> None:
+        os.environ["OPENHERON_BROWSER_NODE_PROXY_URL"] = "http://proxy.local:8787"
+        os.environ["OPENHERON_BROWSER_NODE_CAPABILITY_JSON"] = json.dumps(
+            {"capability": {"backend": "node-proxy", "supportedActions": ["status"]}}
+        )
+        http_error = HTTPError(
+            url="http://proxy.local:8787/",
+            code=502,
+            msg="Bad Gateway",
+            hdrs=None,
+            fp=BytesIO(b'{"error":"failed","status":502}'),
+        )
+        with patch("openheron.tools.urlopen", side_effect=http_error):
+            payload = json.loads(browser(action="status", target="node"))
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["target"], "node")
+        self.assertEqual(payload["capability"]["backend"], "node-proxy")
+
+    def test_browser_tool_proxy_url_error_includes_default_target_capability(self) -> None:
+        os.environ["OPENHERON_BROWSER_SANDBOX_PROXY_URL"] = "http://sandbox-proxy.local:9797"
+        with patch("openheron.tools.urlopen", side_effect=URLError(TimeoutError("timed out"))):
+            payload = json.loads(browser(action="status", target="sandbox"))
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["target"], "sandbox")
+        self.assertEqual(payload["capability"]["backend"], "sandbox-proxy")
+        self.assertEqual(payload["capability"]["supported_actions"], [])
 
     def test_browser_tool_blocks_private_navigation_by_default(self) -> None:
         json.loads(browser(action="start"))

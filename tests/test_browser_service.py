@@ -21,6 +21,8 @@ class BrowserServiceTests(unittest.TestCase):
         os.environ.pop("OPENHERON_BROWSER_MUTATION_TOKEN", None)
         os.environ.pop("OPENHERON_BROWSER_UPLOAD_ROOT", None)
         os.environ.pop("OPENHERON_BROWSER_ENFORCE_UPLOAD_ROOT", None)
+        os.environ.pop("OPENHERON_BROWSER_ARTIFACT_ROOT", None)
+        os.environ.pop("OPENHERON_BROWSER_ENFORCE_ARTIFACT_ROOT", None)
         configure_browser_runtime(None)
         reset_browser_control_service()
 
@@ -84,6 +86,7 @@ class BrowserServiceTests(unittest.TestCase):
         self.assertIn("example.org", navigated.body["url"])
 
         with tempfile.TemporaryDirectory() as tmp:
+            os.environ["OPENHERON_BROWSER_ARTIFACT_ROOT"] = tmp
             shot_path = Path(tmp) / "shots" / "service.png"
             shot = service.dispatch(
                 BrowserDispatchRequest(
@@ -96,6 +99,36 @@ class BrowserServiceTests(unittest.TestCase):
             self.assertTrue(shot.body["imageBase64"])
             self.assertEqual(Path(shot.body["path"]).resolve(), shot_path.resolve())
             self.assertTrue(shot_path.exists())
+
+            os.environ["OPENHERON_BROWSER_ARTIFACT_ROOT"] = tmp
+            pdf_path = Path(tmp) / "pdfs" / "service.pdf"
+            pdf = service.dispatch(
+                BrowserDispatchRequest(
+                    method="POST",
+                    path="/pdf",
+                    body={"targetId": target_id, "path": str(pdf_path)},
+                )
+            )
+            self.assertEqual(pdf.status, 200)
+            self.assertEqual(Path(pdf.body["path"]).resolve(), pdf_path.resolve())
+            self.assertTrue(pdf_path.exists())
+
+        with tempfile.TemporaryDirectory() as tmp:
+            os.environ["OPENHERON_BROWSER_ARTIFACT_ROOT"] = tmp
+            console_path = Path(tmp) / "console" / "service.json"
+            console = service.dispatch(
+                BrowserDispatchRequest(
+                    method="GET",
+                    path="/console",
+                    query={"targetId": target_id, "level": "info", "path": str(console_path)},
+                )
+            )
+            self.assertEqual(console.status, 200)
+            self.assertIn("messages", console.body)
+            self.assertTrue(console.body["messages"])
+            self.assertEqual(console.body["messages"][0]["level"], "info")
+            self.assertEqual(Path(console.body["path"]).resolve(), console_path.resolve())
+            self.assertTrue(console_path.exists())
 
         with tempfile.TemporaryDirectory() as tmp:
             upload_file = Path(tmp) / "demo.txt"
@@ -209,6 +242,20 @@ class BrowserServiceTests(unittest.TestCase):
         )
         self.assertEqual(chrome_start.status, 501)
         self.assertFalse(chrome_start.body["ok"])
+
+    def test_dispatch_adds_profile_schema_compat_aliases(self) -> None:
+        service = get_browser_control_service()
+
+        profiles = service.dispatch(BrowserDispatchRequest(method="GET", path="/profiles"))
+        self.assertEqual(profiles.status, 200)
+        openheron = next(entry for entry in profiles.body["profiles"] if entry["name"] == "openheron")
+        self.assertEqual(openheron["attach_mode"], openheron["attachMode"])
+        self.assertEqual(openheron["ownership_model"], openheron["ownershipModel"])
+
+        status = service.dispatch(BrowserDispatchRequest(method="GET", path="/", query={"profile": "openheron"}))
+        self.assertEqual(status.status, 200)
+        self.assertEqual(status.body["browser_owned"], status.body["browserOwned"])
+        self.assertEqual(status.body["context_owned"], status.body["contextOwned"])
 
     def test_dispatch_requires_auth_token_when_enabled(self) -> None:
         os.environ["OPENHERON_BROWSER_CONTROL_TOKEN"] = "token-1"

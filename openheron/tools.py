@@ -19,6 +19,11 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
+from .browser_schema import (
+    DEFAULT_PROXY_ERROR_CODES,
+    build_action_guidance,
+    normalize_profile_payload_aliases,
+)
 from .browser_runtime import configure_browser_runtime
 from .browser_service import BrowserDispatchRequest, get_browser_control_service
 from .bus.events import OutboundMessage
@@ -995,12 +1000,15 @@ def browser(
     prompt_text: str | None = None,
     screenshot_path: str | None = None,
     screenshot_type: str | None = None,
+    pdf_path: str | None = None,
+    console_level: str | None = None,
+    console_path: str | None = None,
 ) -> str:
     """Control the built-in browser runtime.
 
     Args:
         action: Browser action name. Supported now:
-            ``status/start/stop/profiles/tabs/open/focus/close/navigate/snapshot/screenshot/upload/dialog/act``.
+            ``status/start/stop/profiles/tabs/open/focus/close/navigate/snapshot/screenshot/pdf/console/upload/dialog/act``.
         target_url: URL used by ``action="open"``.
         target_id: Optional tab target id for ``snapshot`` / ``act``.
         profile: Optional browser profile name (reserved for multi-profile iterations).
@@ -1016,6 +1024,9 @@ def browser(
         prompt_text: Optional prompt text for ``action="dialog"``.
         screenshot_path: Optional output file path for ``action="screenshot"``.
         screenshot_type: Optional image type for ``action="screenshot"`` (`png` or `jpeg`).
+        pdf_path: Optional output path for ``action="pdf"``.
+        console_level: Optional level filter for ``action="console"``.
+        console_path: Optional output path for persisted ``action="console"`` payload.
 
     Returns:
         JSON-formatted action result payload. On errors, returns
@@ -1023,6 +1034,8 @@ def browser(
 
     Notes:
         - Backend is selected by `OPENHERON_BROWSER_RUNTIME` (`playwright` or default memory).
+        - ``profile="chrome"`` requires ``OPENHERON_BROWSER_CHROME_CDP_URL`` when
+          Playwright runtime is enabled.
         - Remote routing:
           - ``target=node`` forwards to ``OPENHERON_BROWSER_NODE_PROXY_URL``.
           - ``target=sandbox`` forwards to ``OPENHERON_BROWSER_SANDBOX_PROXY_URL``.
@@ -1050,6 +1063,9 @@ def browser(
             "prompt_text": prompt_text,
             "screenshot_path": screenshot_path,
             "screenshot_type": screenshot_type,
+            "pdf_path": pdf_path,
+            "console_level": console_level,
+            "console_path": console_path,
         },
     )
 
@@ -1173,6 +1189,25 @@ def browser(
                 "path": (screenshot_path or "").strip() or None,
             },
         ),
+        "pdf": _req(
+            method="POST",
+            path="/pdf",
+            query_value=query,
+            body_value={
+                "targetId": (target_id or "").strip() or None,
+                "path": (pdf_path or "").strip() or None,
+            },
+        ),
+        "console": _req(
+            method="GET",
+            path="/console",
+            query_value={
+                **query,
+                "targetId": (target_id or "").strip() or None,
+                "level": (console_level or "").strip().lower() or None,
+                "path": (console_path or "").strip() or None,
+            },
+        ),
         "upload": _req(
             method="POST",
             path="/hooks/file-chooser",
@@ -1212,11 +1247,47 @@ def browser(
                     "ok": False,
                     "error": (
                         "unknown action; supported actions are "
-                        "status,start,stop,profiles,tabs,open,focus,close,navigate,snapshot,screenshot,upload,dialog,act"
+                        "status,start,stop,profiles,tabs,open,focus,close,navigate,snapshot,screenshot,pdf,console,upload,dialog,act"
                     ),
                 }
             ),
         )
+
+    def _attach_profile_switch_hint(payload: dict[str, Any]) -> dict[str, Any]:
+        error_text = str(payload.get("error") or "").strip().lower()
+        status_value = payload.get("status")
+        if status_value == 409 and "profile mismatch" in error_text:
+            enriched = dict(payload)
+            hint = "Run action=stop on the active profile first, then retry with the target profile."
+            existing = str(enriched.get("hint") or "").strip()
+            enriched["hint"] = existing or hint
+            return enriched
+        return payload
+
+    def _attach_default_browser_error_code(payload: dict[str, Any]) -> dict[str, Any]:
+        if payload.get("ok") is True:
+            return payload
+        existing = str(payload.get("errorCode") or "").strip()
+        if existing:
+            return payload
+        status_value = payload.get("status")
+        code_by_status = {
+            400: "browser_bad_request",
+            401: "browser_unauthorized",
+            403: "browser_forbidden",
+            404: "browser_not_found",
+            409: "browser_conflict",
+            429: "browser_rate_limited",
+            500: "browser_internal_error",
+            501: "browser_not_implemented",
+            502: "browser_bad_gateway",
+            503: "browser_unavailable",
+            504: "browser_timeout",
+        }
+        mapped = code_by_status.get(status_value) if isinstance(status_value, int) else None
+        enriched = dict(payload)
+        enriched["errorCode"] = mapped or "browser_error"
+        return enriched
 
     def _parse_proxy_success_payload(raw_text: str) -> dict[str, Any]:
         text = (raw_text or "").strip()
@@ -1225,7 +1296,12 @@ def browser(
         try:
             parsed = json.loads(text)
         except json.JSONDecodeError:
-            return {"ok": False, "error": "invalid proxy response (non-JSON payload)", "status": 502}
+            return {
+                "ok": False,
+                "error": "invalid proxy response (non-JSON payload)",
+                "status": 502,
+                "errorCode": "proxy_invalid_json",
+            }
         if isinstance(parsed, dict):
             # Node/sandbox proxy commonly wraps actual response as {"result": {...}}.
             wrapped = parsed.get("result")
@@ -1233,40 +1309,239 @@ def browser(
                 merged = dict(wrapped)
                 if "files" in parsed and "files" not in merged:
                     merged["files"] = parsed["files"]
-                return merged
-            return parsed
-        return {"ok": False, "error": "invalid proxy response payload type", "status": 502}
+                return normalize_profile_payload_aliases(_attach_profile_switch_hint(merged))
+            return normalize_profile_payload_aliases(_attach_profile_switch_hint(parsed))
+        return {
+            "ok": False,
+            "error": "invalid proxy response payload type",
+            "status": 502,
+            "errorCode": "proxy_invalid_payload_type",
+        }
 
     def _parse_proxy_error_payload(code: int, detail_text: str, fallback: str) -> dict[str, Any]:
         text = (detail_text or "").strip()
         if not text:
-            return {"ok": False, "error": fallback, "status": code}
+            return _attach_profile_switch_hint(
+                {"ok": False, "error": fallback, "status": code, "errorCode": "proxy_http_error"}
+            )
         try:
             parsed = json.loads(text)
         except json.JSONDecodeError:
-            return {"ok": False, "error": text, "status": code}
+            return _attach_profile_switch_hint(
+                {"ok": False, "error": text, "status": code, "errorCode": "proxy_http_error"}
+            )
         if not isinstance(parsed, dict):
-            return {"ok": False, "error": text, "status": code}
+            return _attach_profile_switch_hint(
+                {"ok": False, "error": text, "status": code, "errorCode": "proxy_http_error"}
+            )
         error_text = str(parsed.get("error") or parsed.get("message") or text).strip() or fallback
         status_value = parsed.get("status")
+        error_code = str(parsed.get("errorCode") or "").strip() or "proxy_http_error"
         if isinstance(status_value, int):
-            return {"ok": False, "error": error_text, "status": status_value}
-        return {"ok": False, "error": error_text, "status": code}
+            return _attach_profile_switch_hint(
+                {"ok": False, "error": error_text, "status": status_value, "errorCode": error_code}
+            )
+        return _attach_profile_switch_hint(
+            {"ok": False, "error": error_text, "status": code, "errorCode": error_code}
+        )
 
     def _proxy_unavailable_payload(reason: Any) -> dict[str, Any]:
         # Keep error shape stable while exposing clearer connectivity classes.
         if isinstance(reason, (TimeoutError, socket.timeout)):
-            return {"ok": False, "error": "browser proxy timeout", "status": 504}
+            return {"ok": False, "error": "browser proxy timeout", "status": 504, "errorCode": "proxy_timeout"}
         if isinstance(reason, ConnectionRefusedError):
-            return {"ok": False, "error": "browser proxy connection refused", "status": 503}
+            return {
+                "ok": False,
+                "error": "browser proxy connection refused",
+                "status": 503,
+                "errorCode": "proxy_connection_refused",
+            }
         reason_text = str(reason or "").strip().lower()
         if "timed out" in reason_text:
-            return {"ok": False, "error": "browser proxy timeout", "status": 504}
+            return {"ok": False, "error": "browser proxy timeout", "status": 504, "errorCode": "proxy_timeout"}
         if "connection refused" in reason_text:
-            return {"ok": False, "error": "browser proxy connection refused", "status": 503}
+            return {
+                "ok": False,
+                "error": "browser proxy connection refused",
+                "status": 503,
+                "errorCode": "proxy_connection_refused",
+            }
         if "name or service not known" in reason_text or "nodename nor servname provided" in reason_text:
-            return {"ok": False, "error": "browser proxy dns resolution failed", "status": 503}
-        return {"ok": False, "error": f"browser proxy unavailable: {reason}", "status": 503}
+            return {
+                "ok": False,
+                "error": "browser proxy dns resolution failed",
+                "status": 503,
+                "errorCode": "proxy_dns_failed",
+            }
+        return {
+            "ok": False,
+            "error": f"browser proxy unavailable: {reason}",
+            "status": 503,
+            "errorCode": "proxy_unavailable",
+        }
+
+    def _resolve_proxy_capability(target_name: str) -> tuple[dict[str, Any] | None, list[str]]:
+        capability_env = (
+            "OPENHERON_BROWSER_NODE_CAPABILITY_JSON"
+            if target_name == "node"
+            else "OPENHERON_BROWSER_SANDBOX_CAPABILITY_JSON"
+        )
+        raw = os.getenv(capability_env, "").strip()
+        if not raw:
+            return None, []
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return None, [f"{capability_env} is invalid JSON; fallback to default proxy capability"]
+        if not isinstance(parsed, dict):
+            return None, [f"{capability_env} must be a JSON object; fallback to default proxy capability"]
+
+        warnings: list[str] = []
+        normalized = dict(parsed)
+        capability_node = normalized.get("capability") if isinstance(normalized.get("capability"), dict) else normalized
+        raw_error_codes = capability_node.get("errorCodes")
+        if raw_error_codes is not None:
+            if not isinstance(raw_error_codes, list):
+                capability_node.pop("errorCodes", None)
+                warnings.append(
+                    f"{capability_env}.capability.errorCodes must be an array of strings; fallback to default error codes"
+                )
+            else:
+                error_codes: list[str] = []
+                for item in raw_error_codes:
+                    value = str(item).strip()
+                    if not value or value in error_codes:
+                        continue
+                    error_codes.append(value)
+                capability_node["errorCodes"] = error_codes
+        return normalize_profile_payload_aliases(normalized), warnings
+
+    def _resolve_supported_actions(capability_payload: dict[str, Any] | None) -> set[str]:
+        if not isinstance(capability_payload, dict):
+            return set()
+        direct = capability_payload.get("supportedActions")
+        nested = None
+        capability_node = capability_payload.get("capability")
+        if isinstance(capability_node, dict):
+            nested = capability_node.get("supportedActions")
+        raw_actions = direct if isinstance(direct, list) else nested if isinstance(nested, list) else []
+        return {str(action_item).strip().lower() for action_item in raw_actions if str(action_item).strip()}
+
+    def _extract_capability_for_output(capability_payload: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not isinstance(capability_payload, dict):
+            return None
+        candidate = capability_payload.get("capability")
+        if isinstance(candidate, dict):
+            return dict(candidate)
+        has_capability_shape = any(
+            key in capability_payload for key in ("backend", "driver", "mode", "attachMode", "supportedActions")
+        )
+        if has_capability_shape:
+            return dict(capability_payload)
+        return None
+
+    def _resolve_recommendation_limit() -> int:
+        raw = os.getenv("OPENHERON_BROWSER_RECOMMENDED_ACTIONS_LIMIT", "").strip()
+        if not raw:
+            return 5
+        try:
+            value = int(raw)
+        except ValueError:
+            return 5
+        return min(max(value, 1), 20)
+
+    def _resolve_recommendation_order() -> list[str] | None:
+        raw = os.getenv("OPENHERON_BROWSER_RECOMMENDED_ACTIONS_ORDER_JSON", "").strip()
+        if not raw:
+            return None
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(parsed, list):
+            return None
+        order: list[str] = []
+        for item in parsed:
+            value = str(item).strip().lower()
+            if not value or value in order:
+                continue
+            order.append(value)
+        return order or None
+
+    def _default_proxy_capability(target_name: str) -> dict[str, Any]:
+        return {
+            "backend": f"{target_name}-proxy",
+            "driver": "remote-proxy",
+            "mode": "remote",
+            "supportedActions": [],
+            "errorCodes": list(DEFAULT_PROXY_ERROR_CODES),
+        }
+
+    def _inject_proxy_capability(
+        payload: dict[str, Any],
+        *,
+        capability_payload: dict[str, Any] | None,
+        target_name: str,
+        force: bool = False,
+    ) -> dict[str, Any]:
+        capability = _extract_capability_for_output(capability_payload)
+        if capability is None and not force:
+            return payload
+        capability = dict(capability or _default_proxy_capability(target_name))
+        recommended_order = _resolve_recommendation_order()
+        if recommended_order:
+            capability.setdefault("recommendedOrder", recommended_order)
+        capability.setdefault("supportedActions", [])
+        capability.setdefault("errorCodes", list(DEFAULT_PROXY_ERROR_CODES))
+        enriched = dict(payload)
+        if "capability" not in enriched:
+            enriched["capability"] = capability
+        enriched.setdefault("target", target_name)
+        return normalize_profile_payload_aliases(enriched)
+
+    def _inject_capability_warnings(payload: dict[str, Any], warnings: list[str]) -> dict[str, Any]:
+        if not warnings:
+            return payload
+        enriched = dict(payload)
+        existing = enriched.get("capabilityWarnings")
+        merged: list[str] = []
+        if isinstance(existing, list):
+            merged.extend(str(item) for item in existing if str(item).strip())
+        for warning in warnings:
+            text = str(warning).strip()
+            if text and text not in merged:
+                merged.append(text)
+        enriched["capabilityWarnings"] = merged
+        return normalize_profile_payload_aliases(enriched)
+
+    def _normalize_proxy_status_profiles_payload(
+        payload: dict[str, Any],
+        *,
+        target_name: str,
+        action_name: str,
+        capability_payload: dict[str, Any] | None,
+    ) -> dict[str, Any]:
+        supported_actions_set = _resolve_supported_actions(capability_payload)
+        guidance = build_action_guidance(
+            supported_actions_set,
+            recommendation_limit=_resolve_recommendation_limit(),
+            preferred_order=_resolve_recommendation_order(),
+        )
+        enriched = _inject_proxy_capability(
+            payload,
+            capability_payload=capability_payload,
+            target_name=target_name,
+            force=True,
+        )
+        if action_name == "profiles":
+            profiles = enriched.get("profiles")
+            if not isinstance(profiles, list):
+                enriched["profiles"] = []
+        if guidance["supportedActions"]:
+            enriched.setdefault("supportedActions", guidance["supportedActions"])
+            if action_name in {"status", "profiles"}:
+                enriched.setdefault("recommendedActions", guidance["recommendedActions"])
+        return enriched
 
     normalized_target = (target or "").strip().lower()
     if (node or "").strip() and normalized_target != "node":
@@ -1296,6 +1571,21 @@ def browser(
                         "status": 501,
                     }
                 ),
+            )
+        capability_payload, capability_warnings = _resolve_proxy_capability(normalized_target)
+        supported_actions = _resolve_supported_actions(capability_payload)
+        if supported_actions and normalized not in supported_actions:
+            blocked_payload = {
+                "ok": False,
+                "error": f'action "{normalized}" is not supported by target "{normalized_target}"',
+                "status": 501,
+                "supportedActions": sorted(supported_actions),
+                "hint": "Run action=status or action=profiles on this target to inspect available actions.",
+            }
+            blocked_payload = _inject_capability_warnings(blocked_payload, capability_warnings)
+            return _ret(
+                "tool.browser.output",
+                _json(blocked_payload),
             )
 
         proxy_query = {
@@ -1332,18 +1622,54 @@ def browser(
             ) as r:
                 raw = r.read().decode("utf-8", errors="replace")
                 payload = _parse_proxy_success_payload(raw)
+                if isinstance(payload, dict):
+                    if normalized in {"status", "profiles"}:
+                        payload = _normalize_proxy_status_profiles_payload(
+                            payload,
+                            target_name=normalized_target,
+                            action_name=normalized,
+                            capability_payload=capability_payload,
+                        )
+                    else:
+                        payload = _inject_proxy_capability(
+                            payload,
+                            capability_payload=capability_payload,
+                            target_name=normalized_target,
+                        )
+                    payload = _inject_capability_warnings(payload, capability_warnings)
                 return _ret("tool.browser.output", _json(payload))
         except HTTPError as e:
             detail = e.read().decode("utf-8", errors="replace")
             payload = _parse_proxy_error_payload(e.code, detail, str(e))
+            if isinstance(payload, dict):
+                payload = _inject_proxy_capability(
+                    payload,
+                    capability_payload=capability_payload,
+                    target_name=normalized_target,
+                    force=True,
+                )
+                payload = _inject_capability_warnings(payload, capability_warnings)
             return _ret("tool.browser.output", _json(payload))
         except URLError as e:
-            return _ret("tool.browser.output", _json(_proxy_unavailable_payload(e.reason)))
+            payload = _proxy_unavailable_payload(e.reason)
+            if isinstance(payload, dict):
+                payload = _inject_proxy_capability(
+                    payload,
+                    capability_payload=capability_payload,
+                    target_name=normalized_target,
+                    force=True,
+                )
+                payload = _inject_capability_warnings(payload, capability_warnings)
+            return _ret("tool.browser.output", _json(payload))
 
     res = get_browser_control_service().dispatch(dispatch_req)
     body = res.body if isinstance(res.body, dict) else {"ok": False, "error": "invalid browser response"}
     if res.status >= 400 and isinstance(body, dict) and "status" not in body:
         body["status"] = res.status
+    if isinstance(body, dict):
+        body = normalize_profile_payload_aliases(
+            _attach_default_browser_error_code(_attach_profile_switch_hint(body))
+        )
     return _ret("tool.browser.output", _json(body))
 
 

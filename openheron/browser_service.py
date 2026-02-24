@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from .browser_routes import register_browser_routes
 from .browser_runtime import get_browser_runtime
+from .browser_schema import normalize_profile_payload_aliases
 
 
 @dataclass(slots=True)
@@ -123,7 +124,10 @@ class BrowserControlService:
                 status=500,
                 body={"ok": False, "error": f"browser service error: {exc}"},
             )
-        return BrowserDispatchResponse(status=res.status_code, body=res.payload)
+        return BrowserDispatchResponse(
+            status=res.status_code,
+            body=normalize_profile_payload_aliases(res.payload),
+        )
 
 
 _service: BrowserControlService | None = None
