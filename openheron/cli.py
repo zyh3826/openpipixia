@@ -2085,11 +2085,13 @@ INSTALL_CHANNEL_PROMPT_RULES: dict[str, tuple[InstallChannelPromptRule, ...]] = 
 
 
 def _build_install_channel_summary_requirements() -> tuple[InstallChannelSummaryRequirement, ...]:
-    """Build install summary requirements from shared channel env-backfill mappings."""
+    """Build install summary requirements from shared doctor channel backfill rules."""
 
     requirements: list[InstallChannelSummaryRequirement] = []
     email_consent_added = False
-    for channel, key, _env_name in CHANNEL_ENV_BACKFILL_MAPPINGS:
+    for backfill_rule in DOCTOR_CHANNEL_ENV_BACKFILL_RULES:
+        channel = backfill_rule.channel
+        key = backfill_rule.key
         if channel == "email" and not email_consent_added:
             requirements.append(
                 InstallChannelSummaryRequirement(
