@@ -894,17 +894,21 @@ def _doctor_backfill_provider_api_key_from_env(
     item = providers_cfg.get(active_provider, {})
     if not isinstance(item, dict):
         return
-    env_name = provider_api_key_env(active_provider)
-    env_value = os.getenv(env_name, "").strip() if env_name else ""
-    if env_value and not str(item.get("apiKey", "")).strip():
-        item["apiKey"] = env_value
-        _doctor_add_change(
-            changes,
-            event_sink=event_sink,
-            code="provider.env.api_key_backfilled",
-            rule="provider_env_backfill",
-            message=f"providers.{active_provider}.apiKey <- {env_name}",
-        )
+
+    for requirement in INSTALL_PROVIDER_SUMMARY_REQUIREMENTS:
+        if requirement.key != "apiKey":
+            continue
+        env_name = requirement.env_name_resolver(active_provider) if requirement.env_name_resolver else ""
+        env_value = os.getenv(env_name, "").strip() if env_name else ""
+        if env_value and not str(item.get(requirement.key, "")).strip():
+            item[requirement.key] = env_value
+            _doctor_add_change(
+                changes,
+                event_sink=event_sink,
+                code="provider.env.api_key_backfilled",
+                rule="provider_env_backfill",
+                message=f"providers.{active_provider}.{requirement.key} <- {env_name}",
+            )
 
 
 def _doctor_apply_minimal_fixes(
@@ -1931,6 +1935,8 @@ class InstallProviderSummaryRequirement:
 
     key: str
     fix_hint_template: str = "set providers.{provider}.{key} in {config_path}"
+    env_name_resolver: Callable[[str], str | None] | None = None
+    skip_for_oauth: bool = False
 
     @property
     def item_suffix(self) -> str:
@@ -2085,7 +2091,11 @@ INSTALL_CHANNEL_SUMMARY_REQUIREMENTS: tuple[InstallChannelSummaryRequirement, ..
 
 
 INSTALL_PROVIDER_SUMMARY_REQUIREMENTS: tuple[InstallProviderSummaryRequirement, ...] = (
-    InstallProviderSummaryRequirement("apiKey"),
+    InstallProviderSummaryRequirement(
+        "apiKey",
+        env_name_resolver=provider_api_key_env,
+        skip_for_oauth=True,
+    ),
 )
 
 
@@ -2105,9 +2115,11 @@ def _install_summary_provider_missing(
     provider_spec = find_provider_spec(selected_provider)
     missing: list[str] = []
     for requirement in INSTALL_PROVIDER_SUMMARY_REQUIREMENTS:
-        if requirement.key == "apiKey":
-            key_env = provider_api_key_env(selected_provider)
-            if key_env and not str(provider_item.get("apiKey", "")).strip() and not (provider_spec and provider_spec.is_oauth):
+        if requirement.skip_for_oauth and provider_spec and provider_spec.is_oauth:
+            continue
+        if requirement.env_name_resolver is not None:
+            env_name = requirement.env_name_resolver(selected_provider)
+            if env_name and not str(provider_item.get(requirement.key, "")).strip():
                 missing.append(f"{selected_provider}.{requirement.item_suffix}")
             continue
         if not str(provider_item.get(requirement.key, "")).strip():

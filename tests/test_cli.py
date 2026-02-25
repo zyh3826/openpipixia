@@ -863,8 +863,17 @@ class CLITests(unittest.TestCase):
     def test_install_summary_provider_schema_contains_api_key_requirement(self) -> None:
         from openheron import cli
 
-        keys = [item.key for item in cli.INSTALL_PROVIDER_SUMMARY_REQUIREMENTS]
-        self.assertIn("apiKey", keys)
+        api_key_rule = next(
+            (
+                item
+                for item in cli.INSTALL_PROVIDER_SUMMARY_REQUIREMENTS
+                if item.key == "apiKey"
+            ),
+            None,
+        )
+        self.assertIsNotNone(api_key_rule)
+        self.assertTrue(api_key_rule.skip_for_oauth)
+        self.assertIsNotNone(api_key_rule.env_name_resolver)
 
     def test_cmd_install_prints_summary_lines(self) -> None:
         from openheron import cli
