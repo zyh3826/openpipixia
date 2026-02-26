@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from openheron.skills import SkillRegistry, list_skills, read_skill
+from openheron.tooling.skills_adapter import SkillRegistry, list_skills, read_skill
 
 
 class SkillRegistryTests(unittest.TestCase):

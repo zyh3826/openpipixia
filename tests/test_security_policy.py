@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from openheron.security import PathGuard, SecurityPolicy, load_security_policy
+from openheron.core.security import PathGuard, SecurityPolicy, load_security_policy
 
 
 class SecurityPolicyTests(unittest.TestCase):

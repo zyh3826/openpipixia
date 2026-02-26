@@ -12,7 +12,7 @@ import argparse
 import json
 import sys
 
-from openheron.tools import computer_task, computer_use
+from openheron.tooling.registry import computer_task, computer_use
 
 
 def main() -> int:

@@ -7,12 +7,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from openheron.browser_service import (
+from openheron.browser.service import (
     BrowserDispatchRequest,
     get_browser_control_service,
     reset_browser_control_service,
 )
-from openheron.browser_runtime import configure_browser_runtime
+from openheron.browser.runtime import configure_browser_runtime
 
 
 class BrowserServiceTests(unittest.TestCase):

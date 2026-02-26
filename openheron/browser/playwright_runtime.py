@@ -14,13 +14,13 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 import uuid
 
-from .browser_runtime import (
+from .runtime import (
     BrowserRuntimeError,
     resolve_browser_artifact_path,
     validate_browser_upload_paths,
     validate_browser_url,
 )
-from .browser_schema import apply_status_metadata, make_profile_entry, make_runtime_capability
+from .schema import apply_status_metadata, make_profile_entry, make_runtime_capability
 
 _SUPPORTED_PROFILES = {"openheron", "chrome"}
 _SNAPSHOT_REF_PATTERN = re.compile(r"^e[1-9][0-9]*$")

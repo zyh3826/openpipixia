@@ -11,7 +11,11 @@ from typing import Any
 
 from loguru import logger
 
-from .env_utils import env_enabled
+from ..core.env_utils import env_enabled
+
+_SKILL_NAME_ALIASES: dict[str, str] = {
+    "self-observe": "memory",
+}
 
 
 @dataclass(frozen=True)
@@ -31,16 +35,23 @@ class SkillRegistry:
         cwd = Path.cwd() if workspace is None else workspace
         self.workspace = cwd.resolve()
         self.workspace_skills_dir = self.workspace / "skills"
-        self.builtin_skills_dir = (
-            (Path(__file__).parent / "skills") if builtin_skills_dir is None else builtin_skills_dir
-        ).resolve()
+        package_builtin_dir = Path(__file__).resolve().parent.parent / "skills"
+        if builtin_skills_dir is not None:
+            self.builtin_skills_dirs = [builtin_skills_dir.resolve()]
+        else:
+            dirs: list[Path] = [package_builtin_dir.resolve()]
+            codex_builtin_dir = Path.home() / ".codex" / "skills"
+            if codex_builtin_dir.resolve() not in dirs:
+                dirs.append(codex_builtin_dir.resolve())
+            self.builtin_skills_dirs = dirs
 
     def list_skills(self) -> list[SkillInfo]:
         """List workspace + bundled skills, builtin taking precedence on name collisions."""
         discovered: dict[str, SkillInfo] = {}
 
-        for info in self._scan(self.builtin_skills_dir, source="builtin"):
-            discovered[info.name] = info
+        for builtin_dir in self.builtin_skills_dirs:
+            for info in self._scan(builtin_dir, source="builtin"):
+                discovered[info.name] = info
 
         for info in self._scan(self.workspace_skills_dir, source="workspace"):
             if info.name in discovered:
@@ -63,7 +74,7 @@ class SkillRegistry:
                     {
                         "workspace": str(self.workspace),
                         "workspace_skills_dir": str(self.workspace_skills_dir),
-                        "builtin_skills_dir": str(self.builtin_skills_dir),
+                        "builtin_skills_dirs": [str(p) for p in self.builtin_skills_dirs],
                         "count": len(items),
                         "names": [i.name for i in items],
                     }
@@ -123,6 +134,16 @@ class SkillRegistry:
                     description=description or child.name,
                 )
             )
+            alias = _SKILL_NAME_ALIASES.get(child.name)
+            if alias:
+                result.append(
+                    SkillInfo(
+                        name=alias,
+                        path=skill_file.resolve(),
+                        source=source,
+                        description=description or alias,
+                    )
+                )
         return result
 
     def _extract_description(self, skill_file: Path) -> str | None:

@@ -17,8 +17,8 @@ from typing import Any, Protocol
 from urllib.parse import urlparse
 import uuid
 
-from .browser_schema import apply_status_metadata, make_profile_entry, make_runtime_capability
-from .env_utils import env_enabled
+from .schema import apply_status_metadata, make_profile_entry, make_runtime_capability
+from ..core.env_utils import env_enabled
 
 
 _SUPPORTED_SCHEMES = {"http", "https", "about"}
@@ -791,7 +791,7 @@ _runtime: BrowserRuntime | None = None
 def _create_playwright_runtime() -> BrowserRuntime:
     """Create Playwright runtime lazily to avoid hard dependency at import time."""
 
-    from .browser_playwright_runtime import PlaywrightBrowserRuntime
+    from .playwright_runtime import PlaywrightBrowserRuntime
 
     return PlaywrightBrowserRuntime()
 
@@ -833,7 +833,7 @@ def configure_browser_runtime(runtime: BrowserRuntime | None) -> None:
     _runtime = runtime if runtime is not None else _create_runtime_from_env()
     # Keep dispatcher routes bound to the newest runtime instance in tests.
     try:
-        from .browser_service import reset_browser_control_service
+        from .service import reset_browser_control_service
 
         reset_browser_control_service()
     except Exception:

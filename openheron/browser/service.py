@@ -6,9 +6,9 @@ from dataclasses import dataclass
 import os
 from typing import Any, Callable
 
-from .browser_routes import register_browser_routes
-from .browser_runtime import get_browser_runtime
-from .browser_schema import normalize_profile_payload_aliases
+from .routes import register_browser_routes
+from .runtime import get_browser_runtime
+from .schema import normalize_profile_payload_aliases
 
 
 @dataclass(slots=True)

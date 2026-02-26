@@ -5,7 +5,7 @@ from __future__ import annotations
 import unittest
 import unittest.mock
 
-from openheron.gui_executor import CapturedScreen, GroundingExecutor, PyAutoGuiRuntime
+from openheron.gui.executor import CapturedScreen, GroundingExecutor, PyAutoGuiRuntime
 
 
 class _FakeRuntime:
@@ -127,7 +127,7 @@ class GuiExecutorTests(unittest.TestCase):
             max_wait_seconds=0.1,
         )
 
-        with unittest.mock.patch("openheron.gui_executor.time.sleep") as mocked_sleep:
+        with unittest.mock.patch("openheron.gui.executor.time.sleep") as mocked_sleep:
             runtime.perform({"action": "wait", "time": 8})
         mocked_sleep.assert_called_once_with(0.1)
 

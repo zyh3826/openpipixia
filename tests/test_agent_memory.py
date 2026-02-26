@@ -50,7 +50,7 @@ class AgentMemoryTests(unittest.TestCase):
         from openheron import agent
 
         sentinel_toolset = object()
-        with patch("openheron.agent.build_mcp_toolsets_from_env", return_value=[sentinel_toolset]):
+        with patch("openheron.app.agent.build_mcp_toolsets_from_env", return_value=[sentinel_toolset]):
             tools = agent._build_tools()
         self.assertIn(sentinel_toolset, tools)
 

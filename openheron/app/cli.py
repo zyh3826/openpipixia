@@ -23,8 +23,8 @@ from urllib.parse import urlparse
 from google.genai import types
 from loguru import logger
 
-from .channels.factory import build_channel_manager, parse_enabled_channels, validate_channel_setup
-from .config import (
+from ..channels.factory import build_channel_manager, parse_enabled_channels, validate_channel_setup
+from ..core.config import (
     bootstrap_env_from_config,
     default_config,
     default_runtime_config,
@@ -36,16 +36,21 @@ from .config import (
     save_config,
     save_runtime_config,
 )
-from .env_utils import env_enabled
-from . import doctor_rules, install_rules
-from .logging_utils import debug_logging_enabled, emit_debug
-from .mcp_registry import ManagedMcpToolset, build_mcp_toolsets_from_env, probe_mcp_toolsets, summarize_mcp_toolsets
-from .onboarding_adapters import (
+from ..core.env_utils import env_enabled
+from ..core import doctor_rules, install_rules
+from ..core.logging_utils import debug_logging_enabled, emit_debug
+from ..core.mcp_registry import (
+    ManagedMcpToolset,
+    build_mcp_toolsets_from_env,
+    probe_mcp_toolsets,
+    summarize_mcp_toolsets,
+)
+from ..core.onboarding_adapters import (
     ApiKeyProviderOnboardingAdapter,
     resolve_channel_onboarding_adapter,
     resolve_provider_onboarding_adapter,
 )
-from .provider import (
+from ..core.provider import (
     DEFAULT_PROVIDER,
     canonical_provider_name,
     normalize_model_name,
@@ -55,24 +60,24 @@ from .provider import (
     provider_names,
     validate_provider_runtime,
 )
-from .provider_registry import find_provider_spec
-from .runtime.adk_utils import extract_text, merge_text_stream
-from .runtime.cron_helpers import cron_store_path, format_schedule, format_timestamp_ms
-from .runtime.cron_service import CronService
-from .runtime.cron_schedule_parser import parse_schedule_input
-from .runtime.heartbeat_status_store import read_heartbeat_status_snapshot
-from .runtime.token_usage_store import parse_time_filter_to_epoch_ms, read_token_usage_stats, token_usage_db_path
-from .runtime.gateway_service import (
+from ..core.provider_registry import find_provider_spec
+from ..runtime.adk_utils import extract_text, merge_text_stream
+from ..runtime.cron_helpers import cron_store_path, format_schedule, format_timestamp_ms
+from ..runtime.cron_service import CronService
+from ..runtime.cron_schedule_parser import parse_schedule_input
+from ..runtime.heartbeat_status_store import read_heartbeat_status_snapshot
+from ..runtime.token_usage_store import parse_time_filter_to_epoch_ms, read_token_usage_stats, token_usage_db_path
+from ..runtime.gateway_service import (
     detect_service_manager,
     gateway_service_name,
     render_launchd_plist,
     render_systemd_unit,
 )
-from .runtime.message_time import inject_request_time
-from .runtime.runner_factory import create_runner
-from .runtime.session_service import load_session_config
-from .security import load_security_policy
-from .skills import get_registry
+from ..runtime.message_time import inject_request_time
+from ..runtime.runner_factory import create_runner
+from ..runtime.session_service import load_session_config
+from ..core.security import load_security_policy
+from ..tooling.skills_adapter import get_registry
 
 
 def _stdout_line(message: str) -> None:
@@ -3123,7 +3128,7 @@ def _cmd_gateway_start(*, channels: str | None, sender_id: str, chat_id: str) ->
     cmd = [
         sys.executable,
         "-m",
-        "openheron.cli",
+        "openheron.app.cli",
         "gateway",
         "--channels",
         channels_value,
@@ -3316,7 +3321,7 @@ def _cmd_gateway(
     interactive_local: bool,
 ) -> int:
     from .agent import root_agent
-    from .bus.queue import MessageBus
+    from ..bus.queue import MessageBus
     from .gateway import Gateway
 
     async def _run() -> int:
@@ -3754,7 +3759,7 @@ def _gateway_service_exec_argv(channels: str) -> tuple[str, list[str]]:
     openheron_bin = shutil.which("openheron")
     if openheron_bin:
         return openheron_bin, ["gateway", "--channels", channels]
-    return sys.executable, ["-m", "openheron.cli", "gateway", "--channels", channels]
+    return sys.executable, ["-m", "openheron.app.cli", "gateway", "--channels", channels]
 
 
 def _run_gateway_service_enable(*, manager: str, manifest_path: Path, service_name: str) -> tuple[bool, str]:

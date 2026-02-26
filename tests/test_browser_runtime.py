@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from openheron.browser_runtime import (
+from openheron.browser.runtime import (
     BrowserRuntimeError,
     InMemoryBrowserRuntime,
     configure_browser_runtime,
@@ -36,7 +36,7 @@ class BrowserRuntimeTests(unittest.TestCase):
 
     def test_playwright_mode_falls_back_to_memory_when_adapter_fails(self) -> None:
         os.environ["OPENHERON_BROWSER_RUNTIME"] = "playwright"
-        with patch("openheron.browser_runtime._create_playwright_runtime", side_effect=RuntimeError("boom")):
+        with patch("openheron.browser.runtime._create_playwright_runtime", side_effect=RuntimeError("boom")):
             configure_browser_runtime(None)
             runtime = get_browser_runtime()
         self.assertIsInstance(runtime, InMemoryBrowserRuntime)
@@ -44,14 +44,14 @@ class BrowserRuntimeTests(unittest.TestCase):
     def test_playwright_mode_strict_raises_when_adapter_fails(self) -> None:
         os.environ["OPENHERON_BROWSER_RUNTIME"] = "playwright"
         os.environ["OPENHERON_BROWSER_RUNTIME_STRICT"] = "1"
-        with patch("openheron.browser_runtime._create_playwright_runtime", side_effect=RuntimeError("boom")):
+        with patch("openheron.browser.runtime._create_playwright_runtime", side_effect=RuntimeError("boom")):
             with self.assertRaises(RuntimeError):
                 configure_browser_runtime(None)
 
     def test_playwright_mode_uses_adapter_when_available(self) -> None:
         os.environ["OPENHERON_BROWSER_RUNTIME"] = "playwright"
         sentinel = InMemoryBrowserRuntime()
-        with patch("openheron.browser_runtime._create_playwright_runtime", return_value=sentinel):
+        with patch("openheron.browser.runtime._create_playwright_runtime", return_value=sentinel):
             configure_browser_runtime(None)
             runtime = get_browser_runtime()
         self.assertIs(runtime, sentinel)

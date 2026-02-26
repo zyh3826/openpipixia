@@ -12,8 +12,8 @@ import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from openheron.browser_runtime import configure_browser_runtime
-from openheron.tools import browser
+from openheron.browser.runtime import configure_browser_runtime
+from openheron.tooling.registry import browser
 
 
 class BrowserE2EHttpTests(unittest.TestCase):

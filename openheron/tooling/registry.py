@@ -19,26 +19,26 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlparse
 from urllib.request import Request, urlopen
 
-from .browser_schema import (
+from ..browser.schema import (
     DEFAULT_PROXY_ERROR_CODES,
     build_action_guidance,
     normalize_profile_payload_aliases,
 )
-from .browser_runtime import configure_browser_runtime
-from .browser_service import BrowserDispatchRequest, get_browser_control_service
-from .bus.events import OutboundMessage
-from .env_utils import env_enabled
-from .exec_policy import command_segments as _policy_command_segments
-from .exec_policy import validate_exec_security as _policy_validate_exec_security
-from .gui_executor import execute_gui_action
-from .gui_task_runner import execute_gui_task
-from .logging_utils import debug_logging_enabled, emit_debug
-from .runtime.cron_helpers import cron_store_path, format_schedule
-from .runtime.cron_schedule_parser import parse_schedule_input
-from .runtime.cron_service import CronService
-from .runtime.process_sessions import get_process_session_manager
-from .runtime.tool_context import get_route
-from .security import PathGuard, SecurityPolicy, load_security_policy
+from ..browser.runtime import configure_browser_runtime
+from ..browser.service import BrowserDispatchRequest, get_browser_control_service
+from ..bus.events import OutboundMessage
+from ..core.env_utils import env_enabled
+from ..core.exec_policy import command_segments as _policy_command_segments
+from ..core.exec_policy import validate_exec_security as _policy_validate_exec_security
+from ..gui.executor import execute_gui_action
+from ..gui.task_runner import execute_gui_task
+from ..core.logging_utils import debug_logging_enabled, emit_debug
+from ..runtime.cron_helpers import cron_store_path, format_schedule
+from ..runtime.cron_schedule_parser import parse_schedule_input
+from ..runtime.cron_service import CronService
+from ..runtime.process_sessions import get_process_session_manager
+from ..runtime.tool_context import get_route
+from ..core.security import PathGuard, SecurityPolicy, load_security_policy
 
 
 _OUTBOUND_PUBLISHER: Callable[[OutboundMessage], Awaitable[None]] | None = None

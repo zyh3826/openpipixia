@@ -8,7 +8,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from openheron.config import (
+from openheron.core.config import (
     apply_config_to_env,
     bootstrap_env_from_config,
     default_config,

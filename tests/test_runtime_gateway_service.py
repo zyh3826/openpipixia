@@ -24,7 +24,7 @@ def test_gateway_service_name_normalization() -> None:
 
 def test_render_launchd_plist_contains_required_sections() -> None:
     content = render_launchd_plist(
-        label="ai.openheron.gateway",
+        label="ai.openheron.app.gateway",
         program="/usr/local/bin/openheron",
         args=["gateway", "--channels", "local,feishu"],
         working_directory="/tmp/openheron",
@@ -34,7 +34,7 @@ def test_render_launchd_plist_contains_required_sections() -> None:
     )
 
     assert "<key>Label</key>" in content
-    assert "<string>ai.openheron.gateway</string>" in content
+    assert "<string>ai.openheron.app.gateway</string>" in content
     assert "<key>ProgramArguments</key>" in content
     assert "<string>/usr/local/bin/openheron</string>" in content
     assert "<string>gateway</string>" in content

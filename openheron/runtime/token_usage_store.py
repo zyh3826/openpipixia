@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from ..config import get_data_dir
+from ..core.config import get_data_dir
 
 
 def token_usage_db_path() -> Path:

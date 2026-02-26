@@ -16,11 +16,11 @@ from google.adk.tools import LongRunningFunctionTool
 
 from openheron.bus.events import InboundMessage, OutboundMessage
 from openheron.bus.queue import MessageBus
-from openheron.gateway import Gateway
+from openheron.app.gateway import Gateway
 from openheron.runtime.cron_service import CronJob, CronJobState, CronPayload, CronSchedule
 from openheron.runtime.heartbeat_runner import HeartbeatRunRequest
 from openheron.runtime.heartbeat_status_store import read_heartbeat_status_snapshot
-from openheron.tools import SubagentSpawnRequest
+from openheron.tooling.registry import SubagentSpawnRequest
 
 
 class MessageBusTests(unittest.IsolatedAsyncioTestCase):
@@ -61,7 +61,7 @@ class GatewayTests(unittest.TestCase):
                 yield fake_event_2
 
         fake_agent = pytypes.SimpleNamespace(name="openheron")
-        with patch("openheron.gateway.create_runner", return_value=(_FakeRunner(), object())):
+        with patch("openheron.app.gateway.create_runner", return_value=(_FakeRunner(), object())):
             gateway = Gateway(agent=fake_agent, app_name="openheron", bus=MessageBus())
             inbound = InboundMessage(
                 channel="local",
@@ -95,7 +95,7 @@ class GatewayTests(unittest.TestCase):
                 yield fake_event_2
 
         fake_agent = pytypes.SimpleNamespace(name="openheron")
-        with patch("openheron.gateway.create_runner", return_value=(_FakeRunner(), object())):
+        with patch("openheron.app.gateway.create_runner", return_value=(_FakeRunner(), object())):
             gateway = Gateway(agent=fake_agent, app_name="openheron", bus=MessageBus())
             inbound = InboundMessage(channel="local", sender_id="u1", chat_id="c1", content="hello")
             outbound = asyncio.run(gateway.process_message(inbound))
@@ -114,7 +114,7 @@ class GatewayTests(unittest.TestCase):
                 yield fake_event
 
         fake_agent = pytypes.SimpleNamespace(name="openheron")
-        with patch("openheron.gateway.create_runner", return_value=(_FakeRunner(), object())):
+        with patch("openheron.app.gateway.create_runner", return_value=(_FakeRunner(), object())):
             gateway = Gateway(agent=fake_agent, app_name="openheron", bus=MessageBus())
             inbound = InboundMessage(channel="local", sender_id="u1", chat_id="c1", content="/help")
             outbound = asyncio.run(gateway.process_message(inbound))
@@ -135,7 +135,7 @@ class GatewayTests(unittest.TestCase):
                 yield fake_event
 
         fake_agent = pytypes.SimpleNamespace(name="openheron")
-        with patch("openheron.gateway.create_runner", return_value=(_FakeRunner(), object())):
+        with patch("openheron.app.gateway.create_runner", return_value=(_FakeRunner(), object())):
             gateway = Gateway(agent=fake_agent, app_name="openheron", bus=MessageBus())
 
             first = InboundMessage(channel="local", sender_id="u1", chat_id="c1", content="hello")
@@ -174,7 +174,7 @@ class GatewayTests(unittest.TestCase):
 
         fake_agent = pytypes.SimpleNamespace(name="openheron")
         with patch(
-            "openheron.gateway.create_runner",
+            "openheron.app.gateway.create_runner",
             side_effect=[
                 (_FakeRunner(memory_service=memory_service, app_name="openheron"), session_service),
                 (_FakeRunner(memory_service=memory_service, app_name="openheron"), session_service),
@@ -201,7 +201,7 @@ class GatewayLoopResilienceTests(unittest.IsolatedAsyncioTestCase):
                     yield  # pragma: no cover
 
         fake_agent = pytypes.SimpleNamespace(name="openheron")
-        with patch("openheron.gateway.create_runner", return_value=(_FakeRunner(), object())):
+        with patch("openheron.app.gateway.create_runner", return_value=(_FakeRunner(), object())):
             bus = MessageBus()
             gateway = Gateway(agent=fake_agent, app_name="openheron", bus=bus)
 
@@ -233,11 +233,11 @@ class GatewayCronTests(unittest.IsolatedAsyncioTestCase):
         fake_cron_service = pytypes.SimpleNamespace(start=AsyncMock(), stop=Mock())
         fake_heartbeat_runner = pytypes.SimpleNamespace(start=AsyncMock(), stop=AsyncMock())
         heartbeat_waker = Mock()
-        with patch("openheron.gateway.create_runner", return_value=(_FakeRunner(), object())):
+        with patch("openheron.app.gateway.create_runner", return_value=(_FakeRunner(), object())):
             with (
-                patch("openheron.gateway.CronService", return_value=fake_cron_service),
-                patch("openheron.gateway.HeartbeatRunner", return_value=fake_heartbeat_runner),
-                patch("openheron.gateway.configure_heartbeat_waker", heartbeat_waker),
+                patch("openheron.app.gateway.CronService", return_value=fake_cron_service),
+                patch("openheron.app.gateway.HeartbeatRunner", return_value=fake_heartbeat_runner),
+                patch("openheron.app.gateway.configure_heartbeat_waker", heartbeat_waker),
             ):
                 gateway = Gateway(agent=fake_agent, app_name="openheron", bus=MessageBus())
                 await gateway.start()
@@ -261,7 +261,7 @@ class GatewayCronTests(unittest.IsolatedAsyncioTestCase):
                 yield fake_event
 
         fake_agent = pytypes.SimpleNamespace(name="openheron")
-        with patch("openheron.gateway.create_runner", return_value=(_FakeRunner(), object())):
+        with patch("openheron.app.gateway.create_runner", return_value=(_FakeRunner(), object())):
             gateway = Gateway(agent=fake_agent, app_name="openheron", bus=MessageBus())
 
         req = HeartbeatRunRequest(reason="manual", prompt="ops check")
@@ -283,7 +283,7 @@ class GatewayCronTests(unittest.IsolatedAsyncioTestCase):
                 yield fake_event
 
         fake_agent = pytypes.SimpleNamespace(name="openheron")
-        with patch("openheron.gateway.create_runner", return_value=(_FakeRunner(), object())):
+        with patch("openheron.app.gateway.create_runner", return_value=(_FakeRunner(), object())):
             bus = MessageBus()
             gateway = Gateway(agent=fake_agent, app_name="openheron", bus=bus)
 
@@ -303,7 +303,7 @@ class GatewayCronTests(unittest.IsolatedAsyncioTestCase):
                 yield fake_event
 
         fake_agent = pytypes.SimpleNamespace(name="openheron")
-        with patch("openheron.gateway.create_runner", return_value=(_FakeRunner(), object())):
+        with patch("openheron.app.gateway.create_runner", return_value=(_FakeRunner(), object())):
             bus = MessageBus()
             gateway = Gateway(agent=fake_agent, app_name="openheron", bus=bus)
 
@@ -325,7 +325,7 @@ class GatewayCronTests(unittest.IsolatedAsyncioTestCase):
                 yield fake_event
 
         fake_agent = pytypes.SimpleNamespace(name="openheron")
-        with patch("openheron.gateway.create_runner", return_value=(_FakeRunner(), object())):
+        with patch("openheron.app.gateway.create_runner", return_value=(_FakeRunner(), object())):
             bus = MessageBus()
             gateway = Gateway(agent=fake_agent, app_name="openheron", bus=bus)
 
@@ -366,7 +366,7 @@ class GatewayCronTests(unittest.IsolatedAsyncioTestCase):
                 yield fake_event
 
         fake_agent = pytypes.SimpleNamespace(name="openheron")
-        with patch("openheron.gateway.create_runner", return_value=(_FakeRunner(), object())):
+        with patch("openheron.app.gateway.create_runner", return_value=(_FakeRunner(), object())):
             bus = MessageBus()
             gateway = Gateway(agent=fake_agent, app_name="openheron", bus=bus)
         gateway._last_inbound_route = ("feishu", "chat-ops")
@@ -390,7 +390,7 @@ class GatewayCronTests(unittest.IsolatedAsyncioTestCase):
                 yield fake_event
 
         fake_agent = pytypes.SimpleNamespace(name="openheron")
-        with patch("openheron.gateway.create_runner", return_value=(_FakeRunner(), object())):
+        with patch("openheron.app.gateway.create_runner", return_value=(_FakeRunner(), object())):
             bus = MessageBus()
             gateway = Gateway(agent=fake_agent, app_name="openheron", bus=bus)
 
@@ -410,7 +410,7 @@ class GatewayCronTests(unittest.IsolatedAsyncioTestCase):
                 yield fake_event
 
         fake_agent = pytypes.SimpleNamespace(name="openheron")
-        with patch("openheron.gateway.create_runner", return_value=(_FakeRunner(), object())):
+        with patch("openheron.app.gateway.create_runner", return_value=(_FakeRunner(), object())):
             bus = MessageBus()
             gateway = Gateway(agent=fake_agent, app_name="openheron", bus=bus)
 
@@ -441,7 +441,7 @@ class GatewayCronTests(unittest.IsolatedAsyncioTestCase):
                 yield fake_event
 
         fake_agent = pytypes.SimpleNamespace(name="openheron")
-        with patch("openheron.gateway.create_runner", return_value=(_FakeRunner(), object())):
+        with patch("openheron.app.gateway.create_runner", return_value=(_FakeRunner(), object())):
             gateway = Gateway(agent=fake_agent, app_name="openheron", bus=MessageBus())
 
         req = HeartbeatRunRequest(reason="manual", prompt="ops check")
@@ -475,13 +475,13 @@ class GatewayCronTests(unittest.IsolatedAsyncioTestCase):
                 yield fake_event
 
         fake_agent = pytypes.SimpleNamespace(name="openheron")
-        with patch("openheron.gateway.create_runner", return_value=(_FakeRunner(), object())):
+        with patch("openheron.app.gateway.create_runner", return_value=(_FakeRunner(), object())):
             gateway = Gateway(agent=fake_agent, app_name="openheron", bus=MessageBus())
 
         req = HeartbeatRunRequest(reason="manual", prompt="ops check")
         with tempfile.TemporaryDirectory() as tmp:
             policy = pytypes.SimpleNamespace(workspace_root=Path(tmp))
-            with patch("openheron.gateway.load_security_policy", return_value=policy):
+            with patch("openheron.app.gateway.load_security_policy", return_value=policy):
                 with patch.dict(os.environ, {"OPENHERON_HEARTBEAT_SHOW_OK": "1"}, clear=False):
                     await gateway._run_heartbeat(req)
                 snapshot = read_heartbeat_status_snapshot(Path(tmp))
@@ -497,7 +497,7 @@ class GatewayCronTests(unittest.IsolatedAsyncioTestCase):
                     yield  # pragma: no cover
 
         fake_agent = pytypes.SimpleNamespace(name="openheron")
-        with patch("openheron.gateway.create_runner", return_value=(_FakeRunner(), object())):
+        with patch("openheron.app.gateway.create_runner", return_value=(_FakeRunner(), object())):
             gateway = Gateway(agent=fake_agent, app_name="openheron", bus=MessageBus())
 
         status = gateway.heartbeat_status()
@@ -517,7 +517,7 @@ class GatewayCronTests(unittest.IsolatedAsyncioTestCase):
                 yield fake_event
 
         fake_agent = pytypes.SimpleNamespace(name="openheron")
-        with patch("openheron.gateway.create_runner", return_value=(_FakeRunner(), object())):
+        with patch("openheron.app.gateway.create_runner", return_value=(_FakeRunner(), object())):
             bus = MessageBus()
             gateway = Gateway(agent=fake_agent, app_name="openheron", bus=bus)
 
@@ -553,7 +553,7 @@ class GatewayCronTests(unittest.IsolatedAsyncioTestCase):
                 yield fake_event
 
         fake_agent = pytypes.SimpleNamespace(name="openheron")
-        with patch("openheron.gateway.create_runner", return_value=(_FakeRunner(), object())):
+        with patch("openheron.app.gateway.create_runner", return_value=(_FakeRunner(), object())):
             gateway = Gateway(agent=fake_agent, app_name="openheron", bus=MessageBus())
 
         fake_heartbeat_runner = pytypes.SimpleNamespace(request_wake=Mock())
@@ -582,7 +582,7 @@ class GatewayCronTests(unittest.IsolatedAsyncioTestCase):
                 yield fake_event
 
         fake_agent = pytypes.SimpleNamespace(name="openheron")
-        with patch("openheron.gateway.create_runner", return_value=(_FakeRunner(), object())):
+        with patch("openheron.app.gateway.create_runner", return_value=(_FakeRunner(), object())):
             gateway = Gateway(agent=fake_agent, app_name="openheron", bus=MessageBus())
 
         job = CronJob(
@@ -618,7 +618,7 @@ class GatewaySubagentTests(unittest.IsolatedAsyncioTestCase):
                     yield subagent_event
 
         fake_agent = pytypes.SimpleNamespace(name="openheron")
-        with patch("openheron.gateway.create_runner", return_value=(_FakeRunner(), object())):
+        with patch("openheron.app.gateway.create_runner", return_value=(_FakeRunner(), object())):
             bus = MessageBus()
             gateway = Gateway(agent=fake_agent, app_name="openheron", bus=bus)
 
@@ -660,7 +660,7 @@ class GatewaySubagentTests(unittest.IsolatedAsyncioTestCase):
                     yield subagent_event
 
         fake_agent = pytypes.SimpleNamespace(name="openheron")
-        with patch("openheron.gateway.create_runner", return_value=(_FakeRunner(), object())):
+        with patch("openheron.app.gateway.create_runner", return_value=(_FakeRunner(), object())):
             bus = MessageBus()
             gateway = Gateway(agent=fake_agent, app_name="openheron", bus=bus)
 
@@ -710,7 +710,7 @@ class GatewaySubagentTests(unittest.IsolatedAsyncioTestCase):
             created_agents.append(agent)
             return _FakeRunner(), object()
 
-        with patch("openheron.gateway.create_runner", side_effect=_create_runner_side_effect):
+        with patch("openheron.app.gateway.create_runner", side_effect=_create_runner_side_effect):
             Gateway(agent=root, app_name=root.name, bus=MessageBus())
 
         self.assertEqual(len(created_agents), 2)

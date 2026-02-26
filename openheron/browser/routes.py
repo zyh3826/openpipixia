@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from .browser_runtime import BrowserRuntime, BrowserRuntimeError
+from .runtime import BrowserRuntime, BrowserRuntimeError
 
 
 class BrowserRouteRequest(Protocol):

@@ -14,7 +14,7 @@ from google.adk.agents.callback_context import CallbackContext
 from google.adk.models.llm_request import LlmRequest
 from google.adk.models.llm_response import LlmResponse
 
-from ..logging_utils import debug_logging_enabled, emit_debug
+from ..core.logging_utils import debug_logging_enabled, emit_debug
 from .token_usage_store import extract_usage_tokens, write_token_usage_event
 
 _DEFAULT_MAX_TEXT_CHARS = 2000

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import unittest
 
-from openheron.browser_schema import (
+from openheron.browser.schema import (
     apply_status_metadata,
     build_action_guidance,
     make_profile_entry,

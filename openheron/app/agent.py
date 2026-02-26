@@ -10,12 +10,12 @@ from google.adk.agents import LlmAgent
 from google.adk.tools import LongRunningFunctionTool
 from google.adk.tools.preload_memory_tool import PreloadMemoryTool
 
-from .mcp_registry import build_mcp_toolsets_from_env
-from .provider import build_adk_model_from_env
-from .runtime.debug_callbacks import after_model_debug_callback, before_model_debug_callback
-from .runtime.workspace_bootstrap import before_model_workspace_bootstrap_callback
-from .skills import get_registry, list_skills, read_skill
-from .tools import (
+from ..core.mcp_registry import build_mcp_toolsets_from_env
+from ..core.provider import build_adk_model_from_env
+from ..runtime.debug_callbacks import after_model_debug_callback, before_model_debug_callback
+from ..runtime.workspace_bootstrap import before_model_workspace_bootstrap_callback
+from ..tooling.skills_adapter import get_registry, list_skills, read_skill
+from ..tooling.registry import (
     browser,
     computer_task,
     computer_use,

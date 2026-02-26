@@ -8,7 +8,7 @@ from typing import Any, Callable
 
 from openai import OpenAI
 
-from .gui_executor import (
+from .executor import (
     DEFAULT_GUI_API_KEY_ENV,
     DEFAULT_GUI_BASE_URL_ENV,
     DEFAULT_GUI_MODEL_ENV,

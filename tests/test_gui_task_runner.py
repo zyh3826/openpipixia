@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import unittest
 
-from openheron.gui_executor import CapturedScreen
-from openheron.gui_task_runner import GuiTaskRunner
+from openheron.gui.executor import CapturedScreen
+from openheron.gui.task_runner import GuiTaskRunner
 
 
 class _FakeRuntime:

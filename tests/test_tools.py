@@ -15,9 +15,9 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.error import URLError
 
-from openheron.browser_service import BrowserDispatchResponse
+from openheron.browser.service import BrowserDispatchResponse
 from openheron.runtime.tool_context import route_context
-from openheron.tools import (
+from openheron.tooling.registry import (
     SubagentSpawnRequest,
     browser,
     computer_task,
@@ -123,14 +123,14 @@ class ToolsTests(unittest.TestCase):
 
     def test_computer_use_tool_calls_executor(self) -> None:
         payload = {"ok": True, "arguments": {"action": "wait", "time": 1}}
-        with patch("openheron.tools.execute_gui_action", return_value=payload) as mocked:
+        with patch("openheron.tooling.registry.execute_gui_action", return_value=payload) as mocked:
             result = computer_use("wait 1 second", dry_run=True, model="m", api_key="k")
         self.assertIn('"ok": true', result)
         mocked.assert_called_once()
 
     def test_computer_task_tool_calls_runner(self) -> None:
         payload = {"ok": True, "finished": True, "message": "done", "steps": []}
-        with patch("openheron.tools.execute_gui_task", return_value=payload) as mocked:
+        with patch("openheron.tooling.registry.execute_gui_task", return_value=payload) as mocked:
             result = computer_task("finish login flow", max_steps=5, dry_run=True, planner_model="m", planner_api_key="k")
         self.assertIn('"ok": true', result)
         mocked.assert_called_once()
@@ -153,7 +153,7 @@ class ToolsTests(unittest.TestCase):
 
         reasons: list[str] = []
         configure_heartbeat_waker(reasons.append)
-        with patch("openheron.tools.get_process_session_manager", return_value=_DummyManager()):
+        with patch("openheron.tooling.registry.get_process_session_manager", return_value=_DummyManager()):
             process_session("write", session_id="s1", data="abc")
             process_session("send-keys", session_id="s1", literal="x")
             process_session("submit", session_id="s1")
@@ -897,7 +897,7 @@ class ToolsTests(unittest.TestCase):
 
         reasons: list[str] = []
         configure_heartbeat_waker(reasons.append)
-        with patch("openheron.tools.get_browser_control_service", return_value=_DummyService()):
+        with patch("openheron.tooling.registry.get_browser_control_service", return_value=_DummyService()):
             payload = json.loads(browser(action="upload", paths=["tmp/a.txt"]))
         self.assertTrue(payload["ok"])
         self.assertIn("hook:upload", reasons)
@@ -909,7 +909,7 @@ class ToolsTests(unittest.TestCase):
 
         reasons: list[str] = []
         configure_heartbeat_waker(reasons.append)
-        with patch("openheron.tools.get_browser_control_service", return_value=_DummyService()):
+        with patch("openheron.tooling.registry.get_browser_control_service", return_value=_DummyService()):
             payload = json.loads(browser(action="dialog", accept=True))
         self.assertTrue(payload["ok"])
         self.assertIn("hook:dialog", reasons)
@@ -949,7 +949,7 @@ class ToolsTests(unittest.TestCase):
                     },
                 )
 
-        with patch("openheron.tools.get_browser_control_service", return_value=_FakeBrowserService()):
+        with patch("openheron.tooling.registry.get_browser_control_service", return_value=_FakeBrowserService()):
             payload = json.loads(browser(action="profiles"))
         self.assertEqual(payload["profiles"][0]["attach_mode"], "launch-or-cdp")
         self.assertIn("ownership_model", payload["profiles"][0])
@@ -1010,7 +1010,7 @@ class ToolsTests(unittest.TestCase):
             captured["timeout"] = str(timeout)
             return _DummyResponse('{"ok": true, "via": "node-proxy"}')
 
-        with patch("openheron.tools.urlopen", side_effect=_fake_urlopen):
+        with patch("openheron.tooling.registry.urlopen", side_effect=_fake_urlopen):
             payload = json.loads(browser(action="status", target="node", node="node-1", timeout_ms=3500))
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["via"], "node-proxy")
@@ -1044,7 +1044,7 @@ class ToolsTests(unittest.TestCase):
             captured["token"] = req.headers.get("X-openheron-browser-proxy-token", "")
             return _DummyResponse('{"ok": true, "via": "sandbox-proxy"}')
 
-        with patch("openheron.tools.urlopen", side_effect=_fake_urlopen):
+        with patch("openheron.tooling.registry.urlopen", side_effect=_fake_urlopen):
             payload = json.loads(browser(action="status", target="sandbox"))
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["via"], "sandbox-proxy")
@@ -1056,7 +1056,7 @@ class ToolsTests(unittest.TestCase):
         os.environ["OPENHERON_BROWSER_NODE_CAPABILITY_JSON"] = json.dumps(
             {"capability": {"supportedActions": ["status", "snapshot"]}}
         )
-        with patch("openheron.tools.urlopen") as mocked_urlopen:
+        with patch("openheron.tooling.registry.urlopen") as mocked_urlopen:
             payload = json.loads(browser(action="pdf", target="node"))
         self.assertFalse(payload["ok"])
         self.assertEqual(payload["status"], 501)
@@ -1075,7 +1075,7 @@ class ToolsTests(unittest.TestCase):
                 }
             }
         )
-        with patch("openheron.tools.urlopen") as mocked_urlopen:
+        with patch("openheron.tooling.registry.urlopen") as mocked_urlopen:
             payload = json.loads(browser(action="pdf", target="node"))
         self.assertFalse(payload["ok"])
         self.assertEqual(payload["status"], 501)
@@ -1101,7 +1101,7 @@ class ToolsTests(unittest.TestCase):
         os.environ["OPENHERON_BROWSER_NODE_CAPABILITY_JSON"] = json.dumps(
             {"supportedActions": ["status", "snapshot"]}
         )
-        with patch("openheron.tools.urlopen", return_value=_DummyResponse('{"ok":true}')) as mocked_urlopen:
+        with patch("openheron.tooling.registry.urlopen", return_value=_DummyResponse('{"ok":true}')) as mocked_urlopen:
             payload = json.loads(browser(action="status", target="node"))
         self.assertTrue(payload["ok"])
         mocked_urlopen.assert_called_once()
@@ -1124,7 +1124,7 @@ class ToolsTests(unittest.TestCase):
         os.environ["OPENHERON_BROWSER_NODE_CAPABILITY_JSON"] = json.dumps(
             {"capability": {"backend": "node-proxy", "attachMode": "remote", "supportedActions": ["status"]}}
         )
-        with patch("openheron.tools.urlopen", return_value=_DummyResponse('{"ok":true}')):
+        with patch("openheron.tooling.registry.urlopen", return_value=_DummyResponse('{"ok":true}')):
             payload = json.loads(browser(action="status", target="node"))
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["target"], "node")
@@ -1150,7 +1150,7 @@ class ToolsTests(unittest.TestCase):
             {"capability": {"backend": "node-proxy", "supportedActions": ["status"]}}
         )
         with patch(
-            "openheron.tools.urlopen",
+            "openheron.tooling.registry.urlopen",
             return_value=_DummyResponse('{"ok":true,"capability":{"backend":"proxy-inline","attachMode":"inline"}}'),
         ):
             payload = json.loads(browser(action="status", target="node"))
@@ -1173,7 +1173,7 @@ class ToolsTests(unittest.TestCase):
                 return None
 
         os.environ["OPENHERON_BROWSER_NODE_PROXY_URL"] = "http://proxy.local:8787"
-        with patch("openheron.tools.urlopen", return_value=_DummyResponse('{"ok":true}')):
+        with patch("openheron.tooling.registry.urlopen", return_value=_DummyResponse('{"ok":true}')):
             payload = json.loads(browser(action="status", target="node"))
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["target"], "node")
@@ -1197,7 +1197,7 @@ class ToolsTests(unittest.TestCase):
 
         os.environ["OPENHERON_BROWSER_NODE_PROXY_URL"] = "http://proxy.local:8787"
         os.environ["OPENHERON_BROWSER_NODE_CAPABILITY_JSON"] = '{"capability":'
-        with patch("openheron.tools.urlopen", return_value=_DummyResponse('{"ok":true}')):
+        with patch("openheron.tooling.registry.urlopen", return_value=_DummyResponse('{"ok":true}')):
             payload = json.loads(browser(action="status", target="node"))
         self.assertTrue(payload["ok"])
         self.assertIn("capabilityWarnings", payload)
@@ -1222,7 +1222,7 @@ class ToolsTests(unittest.TestCase):
         os.environ["OPENHERON_BROWSER_NODE_CAPABILITY_JSON"] = json.dumps(
             {"capability": {"backend": "node-proxy", "supportedActions": ["status"], "errorCodes": "bad-shape"}}
         )
-        with patch("openheron.tools.urlopen", return_value=_DummyResponse('{"ok":true}')):
+        with patch("openheron.tooling.registry.urlopen", return_value=_DummyResponse('{"ok":true}')):
             payload = json.loads(browser(action="status", target="node"))
         self.assertTrue(payload["ok"])
         self.assertIn("capabilityWarnings", payload)
@@ -1245,7 +1245,7 @@ class ToolsTests(unittest.TestCase):
 
         os.environ["OPENHERON_BROWSER_NODE_PROXY_URL"] = "http://proxy.local:8787"
         os.environ["OPENHERON_BROWSER_NODE_CAPABILITY_JSON"] = '{"capability":'
-        with patch("openheron.tools.urlopen", return_value=_DummyResponse('{"ok":true}')):
+        with patch("openheron.tooling.registry.urlopen", return_value=_DummyResponse('{"ok":true}')):
             payload = json.loads(browser(action="profiles", target="node"))
         self.assertTrue(payload["ok"])
         self.assertIn("capabilityWarnings", payload)
@@ -1270,7 +1270,7 @@ class ToolsTests(unittest.TestCase):
         os.environ["OPENHERON_BROWSER_NODE_CAPABILITY_JSON"] = json.dumps(
             {"capability": {"supportedActions": ["status", "snapshot", "tabs"]}}
         )
-        with patch("openheron.tools.urlopen", return_value=_DummyResponse('{"ok":true}')):
+        with patch("openheron.tooling.registry.urlopen", return_value=_DummyResponse('{"ok":true}')):
             payload = json.loads(browser(action="status", target="node"))
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["supportedActions"], ["status", "tabs", "snapshot"])
@@ -1307,7 +1307,7 @@ class ToolsTests(unittest.TestCase):
                 }
             }
         )
-        with patch("openheron.tools.urlopen", return_value=_DummyResponse('{"ok":true}')):
+        with patch("openheron.tooling.registry.urlopen", return_value=_DummyResponse('{"ok":true}')):
             payload = json.loads(browser(action="status", target="node"))
         self.assertTrue(payload["ok"])
         self.assertEqual(
@@ -1335,7 +1335,7 @@ class ToolsTests(unittest.TestCase):
         os.environ["OPENHERON_BROWSER_NODE_CAPABILITY_JSON"] = json.dumps(
             {"capability": {"supportedActions": ["status", "profiles", "tabs", "snapshot"]}}
         )
-        with patch("openheron.tools.urlopen", return_value=_DummyResponse('{"ok":true}')):
+        with patch("openheron.tooling.registry.urlopen", return_value=_DummyResponse('{"ok":true}')):
             payload = json.loads(browser(action="status", target="node"))
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["recommendedActions"], ["status", "profiles"])
@@ -1359,7 +1359,7 @@ class ToolsTests(unittest.TestCase):
         os.environ["OPENHERON_BROWSER_NODE_CAPABILITY_JSON"] = json.dumps(
             {"capability": {"supportedActions": ["status", "profiles", "tabs", "snapshot", "open", "pdf"]}}
         )
-        with patch("openheron.tools.urlopen", return_value=_DummyResponse('{"ok":true}')):
+        with patch("openheron.tooling.registry.urlopen", return_value=_DummyResponse('{"ok":true}')):
             payload = json.loads(browser(action="status", target="node"))
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["recommendedActions"], ["status", "profiles", "tabs", "snapshot", "open"])
@@ -1385,7 +1385,7 @@ class ToolsTests(unittest.TestCase):
         os.environ["OPENHERON_BROWSER_NODE_CAPABILITY_JSON"] = json.dumps(
             {"capability": {"supportedActions": ["status", "profiles", "snapshot", "pdf"]}}
         )
-        with patch("openheron.tools.urlopen", return_value=_DummyResponse('{"ok":true}')):
+        with patch("openheron.tooling.registry.urlopen", return_value=_DummyResponse('{"ok":true}')):
             payload = json.loads(browser(action="status", target="node"))
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["supportedActions"], ["pdf", "snapshot", "status", "profiles"])
@@ -1411,7 +1411,7 @@ class ToolsTests(unittest.TestCase):
         os.environ["OPENHERON_BROWSER_NODE_CAPABILITY_JSON"] = json.dumps(
             {"capability": {"supportedActions": ["status", "profiles", "snapshot"]}}
         )
-        with patch("openheron.tools.urlopen", return_value=_DummyResponse('{"ok":true}')):
+        with patch("openheron.tooling.registry.urlopen", return_value=_DummyResponse('{"ok":true}')):
             payload = json.loads(browser(action="status", target="node"))
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["supportedActions"], ["status", "profiles", "snapshot"])
@@ -1431,7 +1431,7 @@ class ToolsTests(unittest.TestCase):
                 return None
 
         os.environ["OPENHERON_BROWSER_SANDBOX_PROXY_URL"] = "http://sandbox-proxy.local:9797"
-        with patch("openheron.tools.urlopen", return_value=_DummyResponse('{"ok":true}')):
+        with patch("openheron.tooling.registry.urlopen", return_value=_DummyResponse('{"ok":true}')):
             payload = json.loads(browser(action="profiles", target="sandbox"))
         self.assertTrue(payload["ok"])
         self.assertEqual(payload["target"], "sandbox")
@@ -1459,7 +1459,7 @@ class ToolsTests(unittest.TestCase):
                     body={"ok": False, "error": "profile mismatch: active profile is openheron"},
                 )
 
-        with patch("openheron.tools.get_browser_control_service", return_value=_DummyService()):
+        with patch("openheron.tooling.registry.get_browser_control_service", return_value=_DummyService()):
             payload = json.loads(browser(action="status"))
         self.assertFalse(payload["ok"])
         self.assertEqual(payload["status"], 409)
@@ -1480,7 +1480,7 @@ class ToolsTests(unittest.TestCase):
                     },
                 )
 
-        with patch("openheron.tools.get_browser_control_service", return_value=_DummyService()):
+        with patch("openheron.tooling.registry.get_browser_control_service", return_value=_DummyService()):
             payload = json.loads(browser(action="status"))
         self.assertFalse(payload["ok"])
         self.assertEqual(payload["status"], 503)
@@ -1498,7 +1498,7 @@ class ToolsTests(unittest.TestCase):
                 return None
 
         os.environ["OPENHERON_BROWSER_NODE_PROXY_URL"] = "http://proxy.local:8787"
-        with patch("openheron.tools.urlopen", return_value=_DummyResponse()):
+        with patch("openheron.tooling.registry.urlopen", return_value=_DummyResponse()):
             payload = json.loads(browser(action="status", target="node"))
         self.assertFalse(payload["ok"])
         self.assertEqual(payload["status"], 502)
@@ -1514,7 +1514,7 @@ class ToolsTests(unittest.TestCase):
             hdrs=None,
             fp=BytesIO(b'{"error":"rate limited","status":429}'),
         )
-        with patch("openheron.tools.urlopen", side_effect=http_error):
+        with patch("openheron.tooling.registry.urlopen", side_effect=http_error):
             payload = json.loads(browser(action="status", target="node"))
         self.assertFalse(payload["ok"])
         self.assertEqual(payload["status"], 429)
@@ -1523,7 +1523,7 @@ class ToolsTests(unittest.TestCase):
 
     def test_browser_tool_maps_proxy_timeout_error(self) -> None:
         os.environ["OPENHERON_BROWSER_NODE_PROXY_URL"] = "http://proxy.local:8787"
-        with patch("openheron.tools.urlopen", side_effect=URLError(TimeoutError("timed out"))):
+        with patch("openheron.tooling.registry.urlopen", side_effect=URLError(TimeoutError("timed out"))):
             payload = json.loads(browser(action="status", target="node"))
         self.assertFalse(payload["ok"])
         self.assertEqual(payload["status"], 504)
@@ -1532,7 +1532,7 @@ class ToolsTests(unittest.TestCase):
 
     def test_browser_tool_maps_proxy_direct_timeout_error(self) -> None:
         os.environ["OPENHERON_BROWSER_NODE_PROXY_URL"] = "http://proxy.local:8787"
-        with patch("openheron.tools.urlopen", side_effect=TimeoutError("timed out")):
+        with patch("openheron.tooling.registry.urlopen", side_effect=TimeoutError("timed out")):
             payload = json.loads(browser(action="status", target="node"))
         self.assertFalse(payload["ok"])
         self.assertEqual(payload["status"], 504)
@@ -1540,7 +1540,7 @@ class ToolsTests(unittest.TestCase):
 
     def test_browser_tool_maps_proxy_connection_refused_error(self) -> None:
         os.environ["OPENHERON_BROWSER_NODE_PROXY_URL"] = "http://proxy.local:8787"
-        with patch("openheron.tools.urlopen", side_effect=URLError(ConnectionRefusedError("refused"))):
+        with patch("openheron.tooling.registry.urlopen", side_effect=URLError(ConnectionRefusedError("refused"))):
             payload = json.loads(browser(action="status", target="node"))
         self.assertFalse(payload["ok"])
         self.assertEqual(payload["status"], 503)
@@ -1559,7 +1559,7 @@ class ToolsTests(unittest.TestCase):
             hdrs=None,
             fp=BytesIO(b'{"error":"failed","status":502}'),
         )
-        with patch("openheron.tools.urlopen", side_effect=http_error):
+        with patch("openheron.tooling.registry.urlopen", side_effect=http_error):
             payload = json.loads(browser(action="status", target="node"))
         self.assertFalse(payload["ok"])
         self.assertEqual(payload["target"], "node")
@@ -1567,7 +1567,7 @@ class ToolsTests(unittest.TestCase):
 
     def test_browser_tool_proxy_url_error_includes_default_target_capability(self) -> None:
         os.environ["OPENHERON_BROWSER_SANDBOX_PROXY_URL"] = "http://sandbox-proxy.local:9797"
-        with patch("openheron.tools.urlopen", side_effect=URLError(TimeoutError("timed out"))):
+        with patch("openheron.tooling.registry.urlopen", side_effect=URLError(TimeoutError("timed out"))):
             payload = json.loads(browser(action="status", target="sandbox"))
         self.assertFalse(payload["ok"])
         self.assertEqual(payload["target"], "sandbox")

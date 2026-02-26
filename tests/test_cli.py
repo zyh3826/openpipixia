@@ -439,7 +439,7 @@ class CLITests(unittest.TestCase):
             },
             clear=False,
         ):
-            with patch("openheron.cli.shutil.which", return_value="/usr/bin/adk"):
+            with patch("openheron.app.cli.shutil.which", return_value="/usr/bin/adk"):
                 with patch.object(cli, "validate_provider_runtime", return_value=None):
                     with patch.object(cli, "get_registry", return_value=fake_registry):
                         with patch.object(cli, "load_session_config", return_value=fake_session_cfg):
@@ -1404,7 +1404,7 @@ class CLITests(unittest.TestCase):
             },
             clear=False,
         ):
-            with patch("openheron.cli.shutil.which", return_value="/usr/bin/adk"):
+            with patch("openheron.app.cli.shutil.which", return_value="/usr/bin/adk"):
                 with patch.object(cli, "validate_provider_runtime", return_value=None):
                     with patch.object(cli, "get_registry", return_value=fake_registry):
                         with patch.object(cli, "load_session_config", return_value=fake_session_cfg):
@@ -1448,7 +1448,7 @@ class CLITests(unittest.TestCase):
             },
             clear=False,
         ):
-            with patch("openheron.cli.shutil.which", return_value="/usr/bin/adk"):
+            with patch("openheron.app.cli.shutil.which", return_value="/usr/bin/adk"):
                 with patch.object(cli, "validate_provider_runtime", return_value=None):
                     with patch.object(
                         cli,
@@ -1499,7 +1499,7 @@ class CLITests(unittest.TestCase):
                 },
                 clear=False,
             ):
-                with patch("openheron.cli.shutil.which", return_value="/usr/bin/adk"):
+                with patch("openheron.app.cli.shutil.which", return_value="/usr/bin/adk"):
                     with patch.object(cli, "validate_provider_runtime", return_value=None):
                         with patch.object(cli, "get_registry", return_value=fake_registry):
                             with patch.object(cli, "load_session_config", return_value=fake_session_cfg):
@@ -1536,7 +1536,7 @@ class CLITests(unittest.TestCase):
             },
             clear=False,
         ):
-            with patch("openheron.cli.shutil.which", return_value="/usr/bin/adk"):
+            with patch("openheron.app.cli.shutil.which", return_value="/usr/bin/adk"):
                 with patch.object(cli, "validate_provider_runtime", return_value=None):
                     with patch.object(cli, "get_registry", return_value=fake_registry):
                         with patch.object(cli, "load_session_config", return_value=fake_session_cfg):
@@ -2030,7 +2030,7 @@ class CLITests(unittest.TestCase):
             },
             clear=False,
         ):
-            with patch("openheron.cli.shutil.which", return_value="/usr/bin/adk"):
+            with patch("openheron.app.cli.shutil.which", return_value="/usr/bin/adk"):
                 with patch.object(cli, "validate_provider_runtime", return_value=None):
                     with patch.object(cli, "get_registry", return_value=fake_registry):
                         with patch.object(cli, "load_session_config", return_value=fake_session_cfg):
@@ -2089,7 +2089,7 @@ class CLITests(unittest.TestCase):
                 },
                 clear=False,
             ):
-                with patch("openheron.cli.shutil.which", return_value="/usr/bin/adk"):
+                with patch("openheron.app.cli.shutil.which", return_value="/usr/bin/adk"):
                     with patch.object(cli, "validate_provider_runtime", return_value=None):
                         with patch.object(cli, "get_registry", return_value=fake_registry):
                             with patch.object(cli, "load_session_config", return_value=fake_session_cfg):
@@ -2126,7 +2126,7 @@ class CLITests(unittest.TestCase):
             },
             clear=False,
         ):
-            with patch("openheron.cli.shutil.which", return_value="/usr/bin/adk"):
+            with patch("openheron.app.cli.shutil.which", return_value="/usr/bin/adk"):
                 with patch.object(cli, "validate_provider_runtime", return_value=None):
                     with patch.object(cli, "get_registry", return_value=fake_registry):
                         with patch.object(cli, "load_session_config", return_value=fake_session_cfg):
@@ -2353,7 +2353,7 @@ class CLITests(unittest.TestCase):
 
     def test_required_mcp_preflight_fails_when_required_server_unhealthy(self) -> None:
         from openheron import cli
-        from openheron.mcp_registry import build_mcp_toolsets
+        from openheron.core.mcp_registry import build_mcp_toolsets
 
         toolsets = build_mcp_toolsets(
             {"filesystem": {"command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]}},
@@ -2402,8 +2402,8 @@ class CLITests(unittest.TestCase):
         with patch.dict(
             sys.modules,
             {
-                "openheron.agent": fake_agent_module,
-                "openheron.gateway": fake_gateway_module,
+                "openheron.app.agent": fake_agent_module,
+                "openheron.app.gateway": fake_gateway_module,
             },
         ):
             with patch.object(cli, "parse_enabled_channels", return_value=["local"]):
@@ -2445,8 +2445,8 @@ class CLITests(unittest.TestCase):
         with patch.dict(
             sys.modules,
             {
-                "openheron.agent": fake_agent_module,
-                "openheron.gateway": fake_gateway_module,
+                "openheron.app.agent": fake_agent_module,
+                "openheron.app.gateway": fake_gateway_module,
             },
         ):
             with patch.object(cli, "parse_enabled_channels", return_value=["whatsapp"]):
@@ -2549,8 +2549,8 @@ class CLITests(unittest.TestCase):
         fake_agent = pytypes.SimpleNamespace(name="openheron")
         fake_agent_module = pytypes.SimpleNamespace(root_agent=fake_agent)
 
-        with patch.dict("sys.modules", {"openheron.agent": fake_agent_module}):
-            with patch("openheron.cli.create_runner", return_value=(_FakeRunner(), object())):
+        with patch.dict("sys.modules", {"openheron.app.agent": fake_agent_module}):
+            with patch("openheron.app.cli.create_runner", return_value=(_FakeRunner(), object())):
                 with patch("builtins.print") as mocked_info:
                     code = cli._cmd_message("hello", user_id="u1", session_id="s1")
 
@@ -2580,8 +2580,8 @@ class CLITests(unittest.TestCase):
         fake_agent = pytypes.SimpleNamespace(name="openheron")
         fake_agent_module = pytypes.SimpleNamespace(root_agent=fake_agent)
 
-        with patch.dict("sys.modules", {"openheron.agent": fake_agent_module}):
-            with patch("openheron.cli.create_runner", return_value=(_FakeRunner(), object())):
+        with patch.dict("sys.modules", {"openheron.app.agent": fake_agent_module}):
+            with patch("openheron.app.cli.create_runner", return_value=(_FakeRunner(), object())):
                 with patch("builtins.print") as mocked_info:
                     code = cli._cmd_message("hello", user_id="u1", session_id="s1")
 
@@ -2933,7 +2933,7 @@ class CLITests(unittest.TestCase):
             },
             clear=False,
         ):
-            with patch("openheron.cli.shutil.which", return_value="/usr/bin/adk"):
+            with patch("openheron.app.cli.shutil.which", return_value="/usr/bin/adk"):
                 with patch.object(cli, "validate_provider_runtime", return_value=None):
                     with patch.object(cli, "get_registry", return_value=fake_registry):
                         with patch.object(cli, "load_session_config", return_value=fake_session_cfg):
@@ -2975,7 +2975,7 @@ class CLITests(unittest.TestCase):
         }
         with patch.object(cli, "_get_bridge_dir", return_value=Path("/tmp/openheron-bridge")) as mocked_bridge:
             with patch.object(cli, "load_config", return_value=fake_cfg):
-                with patch("openheron.cli.subprocess.run") as mocked_run:
+                with patch("openheron.app.cli.subprocess.run") as mocked_run:
                     code = cli._cmd_channels_login(channel_name="whatsapp")
 
         self.assertEqual(code, 0)
@@ -3004,7 +3004,7 @@ class CLITests(unittest.TestCase):
                 with patch.object(cli, "_get_bridge_dir", return_value=Path("/tmp/openheron-bridge")):
                     with patch.object(cli, "_is_pid_running", return_value=False):
                         with patch.object(cli, "load_config", return_value=fake_cfg):
-                            with patch("openheron.cli.subprocess.Popen", return_value=fake_proc) as mocked_popen:
+                            with patch("openheron.app.cli.subprocess.Popen", return_value=fake_proc) as mocked_popen:
                                 code = cli._cmd_channels_bridge_start(channel_name="whatsapp")
 
             self.assertEqual(code, 0)
