@@ -2,6 +2,9 @@
 
 This document describes the tools available to openheron.
 
+Tool signatures are provided automatically via function calling.
+Use this file for non-obvious constraints, safety boundaries, and practical usage patterns.
+
 ## File Operations
 
 ### read_file

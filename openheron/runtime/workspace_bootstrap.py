@@ -1,7 +1,8 @@
 """Workspace bootstrap injection for ADK model requests.
 
-This module implements a minimal workspace-context mechanism for openheron.
-Only ``AGENTS.md``, ``SOUL.md``, and ``USER.md`` are supported in this phase.
+This module injects workspace bootstrap files into the model system prompt.
+Supported files follow the openclaw-style order:
+``AGENTS.md``, ``SOUL.md``, ``TOOLS.md``, ``IDENTITY.md``, ``USER.md``.
 """
 
 from __future__ import annotations
@@ -12,7 +13,13 @@ from pathlib import Path
 from typing import Any
 
 _INJECTED_HEADER = "# Workspace Context (injected by openheron)"
-_BOOTSTRAP_FILENAMES: tuple[str, ...] = ("AGENTS.md", "SOUL.md", "USER.md")
+_BOOTSTRAP_FILENAMES: tuple[str, ...] = (
+    "AGENTS.md",
+    "SOUL.md",
+    "TOOLS.md",
+    "IDENTITY.md",
+    "USER.md",
+)
 _DEFAULT_MAX_CHARS_PER_FILE = 12000
 _DEFAULT_MAX_TOTAL_CHARS = 30000
 
@@ -80,7 +87,7 @@ def load_workspace_bootstrap_sections(workspace_root: Path | None = None) -> lis
 
     Returns:
         Ordered sections loaded from existing files among
-        ``AGENTS.md``, ``SOUL.md``, and ``USER.md``.
+        ``AGENTS.md``, ``SOUL.md``, ``TOOLS.md``, ``IDENTITY.md``, ``USER.md``.
     """
     root = (workspace_root or _workspace_root()).expanduser().resolve(strict=False)
     per_file_limit = _max_chars_per_file()

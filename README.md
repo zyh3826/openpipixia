@@ -115,7 +115,6 @@ openheron install --init-only
 
 Use `openheron install` for the full guided setup (checks + summary + suggestions),
 and use `openheron install --init-only` when you only want minimal file initialization.
-`openheron onboard` is kept as a compatibility alias.
 
 ## Development
 

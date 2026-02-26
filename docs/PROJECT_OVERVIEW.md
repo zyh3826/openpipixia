@@ -127,7 +127,7 @@
 ### 6.1 推荐初始化
 
 ```bash
-openheron onboard
+openheron install --init-only
 ```
 
 会生成：

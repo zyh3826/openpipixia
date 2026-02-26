@@ -1923,12 +1923,12 @@ def _cmd_run(passthrough_args: list[str]) -> int:
     return subprocess.call(cmd)
 
 
-_INSTALL_EMBEDDED_ONBOARD = False
+_INSTALL_EMBEDDED_INIT_SETUP = False
 
 
 @dataclass(frozen=True)
-class OnboardResult:
-    """Resolved onboard side effects for config/runtime/workspace paths."""
+class InstallInitResult:
+    """Resolved install init side effects for config/runtime/workspace paths."""
 
     config_path: Path
     runtime_config_path: Path
@@ -1937,7 +1937,7 @@ class OnboardResult:
     runtime_state: str
 
 
-def _run_onboard_setup(*, force: bool) -> OnboardResult:
+def _run_install_init_setup(*, force: bool) -> InstallInitResult:
     """Create/refresh config + runtime config + workspace and return summary."""
     config_path = get_config_path()
     runtime_config_path = get_runtime_config_path()
@@ -1965,7 +1965,7 @@ def _run_onboard_setup(*, force: bool) -> OnboardResult:
     workspace = Path(str(config.get("agent", {}).get("workspace", ""))).expanduser()
     workspace.mkdir(parents=True, exist_ok=True)
     (workspace / "skills").mkdir(parents=True, exist_ok=True)
-    return OnboardResult(
+    return InstallInitResult(
         config_path=saved_to,
         runtime_config_path=runtime_saved_to,
         workspace=workspace,
@@ -1974,8 +1974,8 @@ def _run_onboard_setup(*, force: bool) -> OnboardResult:
     )
 
 
-def _render_onboard_compact_with_rich(result: OnboardResult) -> bool:
-    """Render onboard summary card for install-embedded setup."""
+def _render_install_init_compact_with_rich(result: InstallInitResult) -> bool:
+    """Render install init summary card for install-embedded setup."""
     if not sys.stdout.isatty():
         return False
     try:
@@ -1995,10 +1995,10 @@ def _render_onboard_compact_with_rich(result: OnboardResult) -> bool:
     return True
 
 
-def _cmd_onboard(force: bool) -> int:
-    result = _run_onboard_setup(force=force)
-    if _INSTALL_EMBEDDED_ONBOARD:
-        if not _render_onboard_compact_with_rich(result):
+def _cmd_install_init_setup(force: bool) -> int:
+    result = _run_install_init_setup(force=force)
+    if _INSTALL_EMBEDDED_INIT_SETUP:
+        if not _render_install_init_compact_with_rich(result):
             _stdout_line(f"Config {result.config_state}: {result.config_path}")
             _stdout_line(f"Runtime config {result.runtime_state}: {result.runtime_config_path}")
             _stdout_line(f"Workspace ready: {result.workspace}")
@@ -2015,20 +2015,6 @@ def _cmd_onboard(force: bool) -> int:
     print("5. Start gateway: openheron gateway")
     print("6. Dry run: openheron doctor")
     return 0
-
-
-def _cmd_onboard_alias(*, force: bool) -> int:
-    """Backward-compatible onboard entrypoint with install migration hint."""
-    _stdout_line("`openheron onboard` is kept for compatibility.")
-    _stdout_line("Recommended replacement: `openheron install --init-only`.")
-    return _cmd_install(
-        force=force,
-        non_interactive=False,
-        accept_risk=False,
-        install_daemon=False,
-        daemon_channels=None,
-        init_only=True,
-    )
 
 
 InstallChannelPromptRule = install_rules.InstallChannelPromptRule
@@ -2909,7 +2895,7 @@ def _cmd_install(
             )
             return 1
         _install_step_line(1, 1, "initializing config and workspace...")
-        return _cmd_onboard(force=force)
+        return _cmd_install_init_setup(force=force)
 
     if non_interactive and not accept_risk:
         _stdout_line("Non-interactive install requires explicit risk acknowledgement.")
@@ -2918,17 +2904,17 @@ def _cmd_install(
 
     total_steps = 3 if install_daemon else 2
     _install_step_line(1, total_steps, "initializing config and workspace...")
-    global _INSTALL_EMBEDDED_ONBOARD
-    _INSTALL_EMBEDDED_ONBOARD = True
+    global _INSTALL_EMBEDDED_INIT_SETUP
+    _INSTALL_EMBEDDED_INIT_SETUP = True
     try:
-        onboard_code = _cmd_onboard(force=force)
+        init_setup_code = _cmd_install_init_setup(force=force)
     finally:
-        _INSTALL_EMBEDDED_ONBOARD = False
-    if onboard_code != 0:
+        _INSTALL_EMBEDDED_INIT_SETUP = False
+    if init_setup_code != 0:
         _render_install_step_outcome_with_rich(
             step=1, total=total_steps, outcome="fail", message="setup initialization failed"
         )
-        return onboard_code
+        return init_setup_code
     _render_install_step_outcome_with_rich(
         step=1, total=total_steps, outcome="done", message="setup initialization complete"
     )
@@ -3901,15 +3887,6 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     subparsers = parser.add_subparsers(dest="command", required=False)
-    onboard_parser = subparsers.add_parser(
-        "onboard",
-        help="(compat) Initialize config/workspace. Prefer: `openheron install --init-only`.",
-    )
-    onboard_parser.add_argument(
-        "--force",
-        action="store_true",
-        help="Overwrite existing config with defaults.",
-    )
     install_parser = subparsers.add_parser(
         "install",
         help="Run guided installation and setup checks. See `openheron install --help` for full options.",
@@ -3921,7 +3898,7 @@ def main(argv: list[str] | None = None) -> None:
     install_parser.add_argument(
         "--init-only",
         action="store_true",
-        help="Initialize config/workspace only (equivalent to legacy `openheron onboard`).",
+        help="Initialize config/workspace only.",
     )
     install_parser.add_argument(
         "--force",
@@ -4188,7 +4165,7 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     args = parser.parse_args(argv)
-    if args.command not in {"onboard", "install"}:
+    if args.command != "install":
         bootstrap_env_from_config()
 
     # Global `-m/--message` is single-turn mode only when no subcommand is used.
@@ -4219,7 +4196,6 @@ def main(argv: list[str] | None = None) -> None:
         code = _dispatch_provider_command(args, parser)
     else:
         handlers: dict[str, Callable[[], int]] = {
-            "onboard": lambda: _cmd_onboard_alias(force=args.force),
             "install": lambda: _cmd_install(
                 force=args.force,
                 non_interactive=args.non_interactive,

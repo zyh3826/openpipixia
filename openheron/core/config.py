@@ -135,7 +135,7 @@ def get_runtime_config_path() -> Path:
 
 
 def get_default_workspace_path() -> Path:
-    """Return default workspace path used by onboard."""
+    """Return default workspace path used by install initialization."""
     return get_data_dir() / "workspace"
 
 

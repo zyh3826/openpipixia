@@ -51,7 +51,7 @@ openheron gateway stop
 # 标准交互式安装（推荐）
 openheron install
 
-# 仅初始化配置与工作区（等价旧命令 onboard）
+# 仅初始化配置与工作区
 openheron install --init-only
 
 # 非交互安装（CI/远程终端常用，需要显式风险确认）
@@ -146,7 +146,7 @@ openheron gateway-service status --json
 openheron install --init-only
 ```
 
-`openheron onboard` 仍可用，但推荐迁移到 `openheron install --init-only`。
+初始化入口统一为 `openheron install --init-only`。
 
 初始化后会生成：
 

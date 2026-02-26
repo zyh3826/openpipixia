@@ -28,16 +28,14 @@ class CLITests(unittest.TestCase):
                 mocked.assert_called_once()
                 mocked_bootstrap.assert_called_once()
 
-    def test_onboard_mode_dispatch(self) -> None:
+    def test_onboard_command_removed(self) -> None:
         from openheron import cli
 
         with patch.object(cli, "bootstrap_env_from_config") as mocked_bootstrap:
-            with patch.object(cli, "_cmd_onboard_alias", return_value=0) as mocked_onboard:
-                with self.assertRaises(SystemExit) as ctx:
-                    cli.main(["onboard"])
-                self.assertEqual(ctx.exception.code, 0)
-                mocked_onboard.assert_called_once_with(force=False)
-                mocked_bootstrap.assert_not_called()
+            with self.assertRaises(SystemExit) as ctx:
+                cli.main(["onboard"])
+            self.assertEqual(ctx.exception.code, 2)
+            mocked_bootstrap.assert_not_called()
 
     def test_install_mode_dispatch(self) -> None:
         from openheron import cli
@@ -466,10 +464,10 @@ class CLITests(unittest.TestCase):
         self.assertIn("Issues:", info_text)
         self.assertIn("MCP server 'filesystem' health check failed", info_text)
 
-    def test_cmd_install_runs_onboard_and_doctor(self) -> None:
+    def test_cmd_install_runs_init_setup_and_doctor(self) -> None:
         from openheron import cli
 
-        with patch.object(cli, "_cmd_onboard", return_value=0) as mocked_onboard:
+        with patch.object(cli, "_cmd_install_init_setup", return_value=0) as mocked_init:
             with patch.object(cli, "_cmd_doctor", return_value=0) as mocked_doctor:
                 with patch.object(cli, "_cmd_gateway_service_install", return_value=0) as mocked_daemon:
                     with patch.object(cli, "bootstrap_env_from_config") as mocked_bootstrap:
@@ -477,29 +475,29 @@ class CLITests(unittest.TestCase):
                             code = cli._cmd_install(force=False, non_interactive=False)
 
         self.assertEqual(code, 0)
-        mocked_onboard.assert_called_once_with(force=False)
+        mocked_init.assert_called_once_with(force=False)
         mocked_doctor.assert_called_once_with(output_json=False, verbose=False)
         mocked_daemon.assert_not_called()
         mocked_bootstrap.assert_called_once()
 
-    def test_cmd_install_init_only_runs_onboard_only(self) -> None:
+    def test_cmd_install_init_only_runs_init_setup_only(self) -> None:
         from openheron import cli
 
-        with patch.object(cli, "_cmd_onboard", return_value=0) as mocked_onboard:
+        with patch.object(cli, "_cmd_install_init_setup", return_value=0) as mocked_init:
             with patch.object(cli, "_cmd_doctor", return_value=0) as mocked_doctor:
                 with patch.object(cli, "bootstrap_env_from_config") as mocked_bootstrap:
                     with patch("builtins.print"):
                         code = cli._cmd_install(force=False, non_interactive=False, init_only=True)
 
         self.assertEqual(code, 0)
-        mocked_onboard.assert_called_once_with(force=False)
+        mocked_init.assert_called_once_with(force=False)
         mocked_doctor.assert_not_called()
         mocked_bootstrap.assert_not_called()
 
     def test_cmd_install_init_only_rejects_conflicting_flags(self) -> None:
         from openheron import cli
 
-        with patch.object(cli, "_cmd_onboard", return_value=0) as mocked_onboard:
+        with patch.object(cli, "_cmd_install_init_setup", return_value=0) as mocked_init:
             with patch("builtins.print") as mocked_print:
                 code = cli._cmd_install(
                     force=False,
@@ -511,33 +509,14 @@ class CLITests(unittest.TestCase):
                 )
 
         self.assertEqual(code, 1)
-        mocked_onboard.assert_not_called()
+        mocked_init.assert_not_called()
         lines = [call.args[0] for call in mocked_print.call_args_list if call.args]
         self.assertTrue(any("init-only mode cannot be combined" in line for line in lines))
-
-    def test_cmd_onboard_alias_prints_migration_hint(self) -> None:
-        from openheron import cli
-
-        with patch.object(cli, "_cmd_install", return_value=0) as mocked_install:
-            with patch("builtins.print") as mocked_print:
-                code = cli._cmd_onboard_alias(force=True)
-
-        self.assertEqual(code, 0)
-        mocked_install.assert_called_once_with(
-            force=True,
-            non_interactive=False,
-            accept_risk=False,
-            install_daemon=False,
-            daemon_channels=None,
-            init_only=True,
-        )
-        lines = [call.args[0] for call in mocked_print.call_args_list if call.args]
-        self.assertTrue(any("install --init-only" in line for line in lines))
 
     def test_cmd_install_with_daemon_calls_gateway_service_install(self) -> None:
         from openheron import cli
 
-        with patch.object(cli, "_cmd_onboard", return_value=0):
+        with patch.object(cli, "_cmd_install_init_setup", return_value=0):
             with patch.object(cli, "_cmd_doctor", return_value=0):
                 with patch.object(cli, "_cmd_gateway_service_install", return_value=0) as mocked_daemon:
                     with patch.object(cli, "bootstrap_env_from_config"):
@@ -556,7 +535,7 @@ class CLITests(unittest.TestCase):
     def test_cmd_install_with_daemon_failure_does_not_block_install(self) -> None:
         from openheron import cli
 
-        with patch.object(cli, "_cmd_onboard", return_value=0):
+        with patch.object(cli, "_cmd_install_init_setup", return_value=0):
             with patch.object(cli, "_cmd_doctor", return_value=0):
                 with patch.object(cli, "_cmd_gateway_service_install", return_value=1):
                     with patch.object(cli, "bootstrap_env_from_config"):
@@ -580,7 +559,7 @@ class CLITests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             config_path = Path(tmp) / "config.json"
             cli.save_config(cli.default_config(), config_path=config_path)
-            with patch.object(cli, "_cmd_onboard", return_value=0):
+            with patch.object(cli, "_cmd_install_init_setup", return_value=0):
                 with patch.object(cli, "_cmd_doctor", return_value=0):
                     with patch.object(cli, "get_config_path", return_value=config_path):
                         with patch.object(cli, "bootstrap_env_from_config"):
@@ -883,7 +862,7 @@ class CLITests(unittest.TestCase):
     def test_cmd_install_skips_interactive_setup_in_non_tty(self) -> None:
         from openheron import cli
 
-        with patch.object(cli, "_cmd_onboard", return_value=0):
+        with patch.object(cli, "_cmd_install_init_setup", return_value=0):
             with patch.object(cli, "_cmd_doctor", return_value=0):
                 with patch.object(cli, "bootstrap_env_from_config"):
                     with patch("sys.stdin.isatty", return_value=False):
@@ -897,7 +876,7 @@ class CLITests(unittest.TestCase):
     def test_cmd_install_non_interactive_skips_setup_prompt(self) -> None:
         from openheron import cli
 
-        with patch.object(cli, "_cmd_onboard", return_value=0):
+        with patch.object(cli, "_cmd_install_init_setup", return_value=0):
             with patch.object(cli, "_cmd_doctor", return_value=0):
                 with patch.object(cli, "bootstrap_env_from_config"):
                     with patch("builtins.input") as mocked_input:
@@ -910,14 +889,14 @@ class CLITests(unittest.TestCase):
     def test_cmd_install_non_interactive_requires_accept_risk(self) -> None:
         from openheron import cli
 
-        with patch.object(cli, "_cmd_onboard", return_value=0) as mocked_onboard:
+        with patch.object(cli, "_cmd_install_init_setup", return_value=0) as mocked_init:
             with patch.object(cli, "_cmd_doctor", return_value=0) as mocked_doctor:
                 with patch.object(cli, "bootstrap_env_from_config") as mocked_bootstrap:
                     with patch("builtins.print") as mocked_print:
                         code = cli._cmd_install(force=False, non_interactive=True, accept_risk=False)
 
         self.assertEqual(code, 1)
-        mocked_onboard.assert_not_called()
+        mocked_init.assert_not_called()
         mocked_doctor.assert_not_called()
         mocked_bootstrap.assert_not_called()
         lines = [call.args[0] for call in mocked_print.call_args_list if call.args]
@@ -1125,7 +1104,7 @@ class CLITests(unittest.TestCase):
     def test_cmd_install_prints_summary_lines(self) -> None:
         from openheron import cli
 
-        with patch.object(cli, "_cmd_onboard", return_value=0):
+        with patch.object(cli, "_cmd_install_init_setup", return_value=0):
             with patch.object(cli, "_cmd_doctor", return_value=0):
                 with patch.object(cli, "bootstrap_env_from_config"):
                     with patch.object(cli, "_install_summary_lines", return_value=["s1", "s2"]):
@@ -1311,7 +1290,7 @@ class CLITests(unittest.TestCase):
     def test_cmd_install_non_interactive_still_prints_summary_lines(self) -> None:
         from openheron import cli
 
-        with patch.object(cli, "_cmd_onboard", return_value=0):
+        with patch.object(cli, "_cmd_install_init_setup", return_value=0):
             with patch.object(cli, "_cmd_doctor", return_value=0):
                 with patch.object(cli, "bootstrap_env_from_config"):
                     with patch.object(cli, "_install_summary_lines", return_value=["sx"]):
@@ -1377,7 +1356,7 @@ class CLITests(unittest.TestCase):
     def test_cmd_install_returns_failure_when_doctor_fails(self) -> None:
         from openheron import cli
 
-        with patch.object(cli, "_cmd_onboard", return_value=0):
+        with patch.object(cli, "_cmd_install_init_setup", return_value=0):
             with patch.object(cli, "_cmd_doctor", return_value=1):
                 with patch.object(cli, "bootstrap_env_from_config"):
                     with patch("builtins.print"):
@@ -2509,12 +2488,12 @@ class CLITests(unittest.TestCase):
             self.assertFalse((log_dir / "gateway.pid").exists())
             self.assertFalse((log_dir / "gateway.meta.json").exists())
 
-    def test_cmd_onboard_creates_config_and_workspace(self) -> None:
+    def test_cmd_install_init_setup_creates_config_and_workspace(self) -> None:
         from openheron import cli
 
         with tempfile.TemporaryDirectory() as tmp:
             with patch.dict(os.environ, {"HOME": tmp}, clear=False):
-                code = cli._cmd_onboard(force=False)
+                code = cli._cmd_install_init_setup(force=False)
 
             self.assertEqual(code, 0)
             config_path = Path(tmp) / ".openheron" / "config.json"

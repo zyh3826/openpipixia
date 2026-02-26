@@ -17,30 +17,36 @@ from openheron.runtime.workspace_bootstrap import (
 
 
 class WorkspaceBootstrapTests(unittest.TestCase):
-    def test_loader_reads_agents_soul_user_in_fixed_order(self) -> None:
+    def test_loader_reads_openclaw_style_files_in_fixed_order(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "AGENTS.md").write_text("agents-rules", encoding="utf-8")
             (root / "SOUL.md").write_text("soul-tone", encoding="utf-8")
+            (root / "TOOLS.md").write_text("tool-usage-notes", encoding="utf-8")
+            (root / "IDENTITY.md").write_text("identity-profile", encoding="utf-8")
             (root / "USER.md").write_text("user-profile", encoding="utf-8")
-            (root / "TOOLS.md").write_text("tools-not-supported-yet", encoding="utf-8")
 
             sections = load_workspace_bootstrap_sections(root)
 
-        self.assertEqual([item.name for item in sections], ["AGENTS.md", "SOUL.md", "USER.md"])
+        self.assertEqual(
+            [item.name for item in sections],
+            ["AGENTS.md", "SOUL.md", "TOOLS.md", "IDENTITY.md", "USER.md"],
+        )
         merged = "\n".join(item.content for item in sections)
         self.assertIn("agents-rules", merged)
         self.assertIn("soul-tone", merged)
+        self.assertIn("tool-usage-notes", merged)
+        self.assertIn("identity-profile", merged)
         self.assertIn("user-profile", merged)
-        self.assertNotIn("tools-not-supported-yet", merged)
 
     def test_callback_prepends_workspace_context_to_system_instruction(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "AGENTS.md").write_text("follow local agent rules", encoding="utf-8")
             (root / "SOUL.md").write_text("keep a concise tone", encoding="utf-8")
+            (root / "TOOLS.md").write_text("always check tool constraints first", encoding="utf-8")
+            (root / "IDENTITY.md").write_text("name: openheron", encoding="utf-8")
             (root / "USER.md").write_text("user prefers chinese", encoding="utf-8")
-            (root / "TOOLS.md").write_text("should not be injected", encoding="utf-8")
 
             llm_request = types.SimpleNamespace(
                 config=types.SimpleNamespace(system_instruction="base-system-instruction"),
@@ -53,11 +59,14 @@ class WorkspaceBootstrapTests(unittest.TestCase):
         self.assertIn("Workspace Context (injected by openheron)", system_instruction)
         self.assertIn("## AGENTS.md", system_instruction)
         self.assertIn("## SOUL.md", system_instruction)
+        self.assertIn("## TOOLS.md", system_instruction)
+        self.assertIn("## IDENTITY.md", system_instruction)
         self.assertIn("## USER.md", system_instruction)
         self.assertIn("follow local agent rules", system_instruction)
         self.assertIn("keep a concise tone", system_instruction)
+        self.assertIn("always check tool constraints first", system_instruction)
+        self.assertIn("name: openheron", system_instruction)
         self.assertIn("user prefers chinese", system_instruction)
-        self.assertNotIn("should not be injected", system_instruction)
         self.assertLess(
             system_instruction.index("Workspace Context (injected by openheron)"),
             system_instruction.index("base-system-instruction"),
