@@ -205,6 +205,7 @@ def default_config() -> dict[str, Any]:
         "gui": {
             "groundingProvider": "",
             "plannerProvider": "",
+            "builtinToolsEnabled": True,
         },
         "session": {
             "dbUrl": "",
@@ -710,6 +711,7 @@ def config_to_env(
     agent = _as_dict(cfg.get("agent"))
     heartbeat = _as_dict(agent.get("heartbeat"))
     active_hours = _as_dict(heartbeat.get("activeHours"))
+    gui = _as_dict(cfg.get("gui"))
     session = _as_dict(cfg.get("session"))
     channels = _as_dict(cfg.get("channels"))
     channel_env = _channel_env_values(channels)
@@ -761,6 +763,9 @@ def config_to_env(
         "OPENHERON_ALLOW_NETWORK": "1" if allow_network else "0",
         "OPENHERON_EXEC_ALLOWLIST": exec_allowlist,
         "OPENHERON_MCP_SERVERS_JSON": mcp_servers_json,
+        "OPENHERON_GUI_BUILTIN_TOOLS_ENABLED": "1"
+        if is_enabled(gui.get("builtinToolsEnabled"), default=True)
+        else "0",
         "OPENHERON_DEBUG": "1" if bool(debug) else "0",
     }
     env.update(gui_multimodal_env)

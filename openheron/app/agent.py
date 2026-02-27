@@ -10,6 +10,8 @@ from google.adk.agents import LlmAgent
 from google.adk.tools import LongRunningFunctionTool
 from google.adk.tools.preload_memory_tool import PreloadMemoryTool
 
+from ..core.env_utils import env_enabled
+from ..core.gui_mcp import resolve_gui_mcp_from_env
 from ..core.mcp_registry import build_mcp_toolsets_from_env
 from ..core.provider import build_adk_model_from_env
 from ..runtime.debug_callbacks import after_model_debug_callback, before_model_debug_callback
@@ -34,6 +36,8 @@ from ..tooling.registry import (
     write_file,
 )
 
+_GUI_BUILTIN_TOOLS_ENABLED_ENV = "OPENHERON_GUI_BUILTIN_TOOLS_ENABLED"
+
 
 async def _after_agent_memory_callback(callback_context: Any) -> None:
     """Persist session history into ADK memory when memory service is configured.
@@ -48,10 +52,32 @@ async def _after_agent_memory_callback(callback_context: Any) -> None:
         return
 
 
+def _gui_builtin_tools_enabled() -> bool:
+    """Return whether legacy builtin GUI tools should be exposed."""
+    return env_enabled(_GUI_BUILTIN_TOOLS_ENABLED_ENV, default=True)
+
+
 def _build_instruction() -> str:
     runtime = f"{platform.system()} {platform.machine()} / Python"
     workspace = os.getenv("OPENHERON_WORKSPACE", os.getcwd())
     skills_summary = get_registry().build_summary()
+    gui_builtin_enabled = _gui_builtin_tools_enabled()
+    gui_mcp_routing = resolve_gui_mcp_from_env()
+    mcp_task_tool = gui_mcp_routing.task_tool_name if gui_mcp_routing else "mcp_*_gui_task"
+    mcp_action_tool = gui_mcp_routing.action_tool_name if gui_mcp_routing else "mcp_*_gui_action"
+
+    gui_tool_guidance = (
+        f"- For desktop GUI tasks, prefer MCP GUI tools when available (`{mcp_task_tool}`, `{mcp_action_tool}`).\n"
+        "- Tool selection guidance:\n"
+        "  - Prefer `browser(...)` for web tasks that are feasible with browser runtime.\n"
+        f"  - Prefer `{mcp_task_tool}(...)` for end-to-end desktop GUI workflows.\n"
+        f"  - Use `{mcp_action_tool}(...)` only for single-step GUI actions or debugging one step.\n"
+    )
+    if gui_builtin_enabled:
+        gui_tool_guidance += (
+            "- Fallback (legacy builtin): use `computer_task(task=..., max_steps=...)` when MCP GUI tools are unavailable.\n"
+            "- Use `computer_use(action=...)` only for single-step builtin GUI actions.\n"
+        )
 
     return f"""You are openheron, a lightweight skills-first coding assistant.
 
@@ -72,13 +98,7 @@ Rules:
 - Use `message_file(path=..., caption=...)` when a local file should be delivered to the current channel.
 - Use `spawn_subagent(prompt=...)` for background sub-tasks that should finish later.
 - Prefer these built-in tools for actions: `read_file`, `write_file`, `edit_file`, `list_dir`, `exec`, `process`, `browser`, `web_search`, `web_fetch`, `message`, `message_image`, `message_file`, `cron`, `spawn_subagent`.
-- For desktop GUI actions, use `computer_use(action=...)` for one-step screenshot-grounded execution.
-- For multi-step desktop GUI tasks, use `computer_task(task=..., max_steps=...)`.
-- Tool selection guidance:
-  - Prefer `browser(...)` for web tasks that are feasible with browser runtime.
-  - Use `computer_task(...)` for end-to-end desktop GUI workflows across apps/windows.
-  - Use `computer_use(...)` only for single-step GUI actions or debugging one step.
-- Browser routing supports `target=host|node|sandbox`; use `target=node` with `node=<id>` when a specific node proxy is required.
+{gui_tool_guidance}- Browser routing supports `target=host|node|sandbox`; use `target=node` with `node=<id>` when a specific node proxy is required.
 - For long-running shell tasks, use `exec(background=true|yield_ms=...)` and follow-up with `process(...)`.
 - Current time is injected into each request payload (e.g. `Current request time`).
   For relative scheduling, always use that injected request time as `now`.
@@ -101,8 +121,6 @@ def _build_tools() -> list[Any]:
         exec_command,
         process_session,
         browser,
-        computer_task,
-        computer_use,
         web_search,
         web_fetch,
         message,
@@ -111,6 +129,8 @@ def _build_tools() -> list[Any]:
         cron,
         LongRunningFunctionTool(func=spawn_subagent),
     ]
+    if _gui_builtin_tools_enabled():
+        tools.extend([computer_task, computer_use])
     tools.extend(build_mcp_toolsets_from_env())
     return tools
 

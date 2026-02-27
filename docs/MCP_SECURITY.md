@@ -22,6 +22,31 @@
 3. 启动 `openheron gateway`
 4. 在对话中调用 MCP 工具（例如 `mcp_filesystem_...`）
 
+### 内置 GUI MCP（推荐）
+
+可将 GUI 能力作为独立 MCP 服务接入，便于统一权限控制：
+
+```json
+{
+  "tools": {
+    "mcpServers": {
+      "openheron_gui": {
+        "enabled": true,
+        "command": "openheron-gui-mcp",
+        "args": [],
+        "toolNamePrefix": "mcp_gui_",
+        "requireConfirmation": true
+      }
+    }
+  }
+}
+```
+
+- 工具名：`mcp_gui_gui_action`、`mcp_gui_gui_task`
+- `requireConfirmation=true` 可将高风险 GUI 执行纳入确认流
+- 细粒度动作控制仍由 GUI 环境变量生效（如 `OPENHERON_GUI_ALLOWED_ACTIONS`）
+- 建议同时设置 `OPENHERON_GUI_BUILTIN_TOOLS_ENABLED=0`，让 agent 仅通过 MCP GUI 工具执行
+
 ### 常用 MCP 环境变量
 
 | 变量 | 默认值 | 作用 |

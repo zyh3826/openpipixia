@@ -18,6 +18,7 @@ dependencies = [
 
 [project.scripts]
 openheron = "openheron.app.cli:main"
+openheron-gui-mcp = "openheron.gui.mcp_server:main"
 
 [build-system]
 requires = ["hatchling"]

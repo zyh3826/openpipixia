@@ -39,6 +39,7 @@ from ..core.config import (
 from ..core.env_utils import env_enabled
 from ..core import doctor_rules, install_rules
 from ..core.logging_utils import debug_logging_enabled, emit_debug
+from ..core.gui_mcp import resolve_gui_mcp_from_env, resolve_gui_mcp_from_summaries
 from ..core.mcp_registry import (
     ManagedMcpToolset,
     build_mcp_toolsets_from_env,
@@ -1106,6 +1107,35 @@ def _doctor_fix_summary(
     }
 
 
+def _gui_execution_path_hint(
+    *,
+    builtin_tools_enabled: bool,
+    gui_task_tool: str | None,
+    gui_action_tool: str | None,
+) -> tuple[str, str]:
+    """Build doctor-friendly GUI execution mode and hint."""
+    gui_mcp_configured = bool(gui_task_tool and gui_action_tool)
+    if builtin_tools_enabled and gui_mcp_configured:
+        return (
+            "hybrid_prefer_mcp",
+            (
+                "MCP GUI + builtin GUI are both enabled. Runtime should prefer "
+                f"`{gui_task_tool}`/`{gui_action_tool}` and keep builtin as fallback."
+            ),
+        )
+    if builtin_tools_enabled and not gui_mcp_configured:
+        return (
+            "builtin_only",
+            "Only builtin GUI tools are enabled. Configure `tools.mcpServers.openheron_gui` to move GUI execution into MCP.",
+        )
+    if (not builtin_tools_enabled) and gui_mcp_configured:
+        return ("mcp_only", "Builtin GUI tools are disabled. GUI execution is routed through MCP only.")
+    return (
+        "disabled",
+        "Builtin GUI tools are disabled and no GUI MCP server is configured. GUI actions/tasks are currently unavailable.",
+    )
+
+
 def _cmd_doctor(
     *,
     output_json: bool = False,
@@ -1194,6 +1224,15 @@ def _cmd_doctor(
     security_policy = load_security_policy()
     mcp_toolsets = build_mcp_toolsets_from_env(log_registered=False)
     mcp_summaries = summarize_mcp_toolsets(mcp_toolsets)
+    gui_builtin_tools_enabled = env_enabled("OPENHERON_GUI_BUILTIN_TOOLS_ENABLED", default=True)
+    gui_mcp = resolve_gui_mcp_from_env() or resolve_gui_mcp_from_summaries(mcp_summaries)
+    gui_task_tool = gui_mcp.task_tool_name if gui_mcp else None
+    gui_action_tool = gui_mcp.action_tool_name if gui_mcp else None
+    gui_mode, gui_hint = _gui_execution_path_hint(
+        builtin_tools_enabled=gui_builtin_tools_enabled,
+        gui_task_tool=gui_task_tool,
+        gui_action_tool=gui_action_tool,
+    )
     mcp_probe_policy = _load_mcp_probe_policy(
         timeout_env_name="OPENHERON_MCP_DOCTOR_TIMEOUT_SECONDS",
         timeout_default=5.0,
@@ -1270,6 +1309,13 @@ def _cmd_doctor(
                 "retry_backoff_seconds": mcp_probe_policy.retry_backoff_seconds,
             },
         },
+        "gui": {
+            "builtin_tools_enabled": gui_builtin_tools_enabled,
+            "task_tool": gui_task_tool,
+            "action_tool": gui_action_tool,
+            "mode": gui_mode,
+            "hint": gui_hint,
+        },
     }
 
     if output_json:
@@ -1304,6 +1350,12 @@ def _cmd_doctor(
         f"allow_exec={security_policy.allow_exec}, "
         f"allow_network={security_policy.allow_network}, "
         f"exec_allowlist={list(security_policy.exec_allowlist)}"
+    )
+    logger.debug(
+        "GUI execution: "
+        f"builtin_tools_enabled={gui_builtin_tools_enabled}, "
+        f"mode={gui_mode}, "
+        f"hint={gui_hint}"
     )
     if not mcp_summaries:
         logger.debug("MCP: no servers configured")
@@ -1343,6 +1395,14 @@ def _cmd_doctor(
             f"last_reason={heartbeat_snapshot.get('last_reason', '-')}, "
             f"reasons={json.dumps(heartbeat_snapshot.get('recent_reason_counts', {}), ensure_ascii=False)}"
         )
+    _stdout_line(
+        "GUI runtime: "
+        f"mode={gui_mode}, "
+        f"builtin_tools_enabled={gui_builtin_tools_enabled}, "
+        f"task_tool={gui_task_tool or '-'}, "
+        f"action_tool={gui_action_tool or '-'}, "
+        f"hint={gui_hint}"
+    )
 
     if issues:
         _stdout_line("Issues:")
@@ -2488,106 +2548,122 @@ def _install_step_line(step: int, total: int, message: str) -> None:
 def _interactive_install_input(prompt: str) -> str:
     """Read one install input value, using questionary when available."""
 
-    try:
-        import questionary  # type: ignore
+    if _can_use_questionary():
+        try:
+            import questionary  # type: ignore
 
-        answer = questionary.text(prompt).ask()
-        return str(answer or "")
+            answer = questionary.text(prompt).ask()
+            return str(answer or "")
+        except Exception:
+            pass
+    return input(prompt)
+
+
+def _can_use_questionary() -> bool:
+    """Return whether rich interactive questionary prompts should be used."""
+    try:
+        return bool(sys.stdin.isatty() and sys.stdout.isatty())
     except Exception:
-        return input(prompt)
+        return False
 
 
 def _interactive_install_select(prompt: str, choices: list[str], default: str) -> str:
     """Select one install option, using questionary when available."""
 
-    try:
+    if _can_use_questionary():
         import questionary  # type: ignore
 
-        answer = questionary.select(prompt, choices=choices, default=default).ask()
-        return str(answer or "")
-    except Exception:
-        _stdout_line(prompt)
-        numbered = list(enumerate(choices, start=1))
-        if "provider" in prompt.lower():
-            oauth_rows: list[tuple[int, str]] = []
-            regular_rows: list[tuple[int, str]] = []
-            for idx, choice in numbered:
-                provider_token = choice.split(" ", 1)[0].strip()
-                if canonical_provider_name(provider_token) in oauth_provider_names():
-                    oauth_rows.append((idx, choice))
-                else:
-                    regular_rows.append((idx, choice))
-            if regular_rows:
-                _stdout_line("  API key providers:")
-                for idx, choice in regular_rows:
-                    marker = " (default)" if choice == default else ""
-                    _stdout_line(f"    {idx}) {choice}{marker}")
-            if oauth_rows:
-                _stdout_line("  OAuth providers (login required, no API key input):")
-                for idx, choice in oauth_rows:
-                    marker = " (default)" if choice == default else ""
-                    _stdout_line(f"    {idx}) {choice}{marker}")
-                _stdout_line("    Use: openheron provider login <provider-name>")
-        else:
-            for idx, choice in numbered:
-                marker = " (default)" if choice == default else ""
-                _stdout_line(f"  {idx}) {choice}{marker}")
-        raw = input("Select one (index/name, Enter=default)> ").strip()
-        if not raw:
-            return default
         try:
-            index = int(raw)
+            answer = questionary.select(prompt, choices=choices, default=default).ask()
+            return str(answer or "")
         except Exception:
-            index = -1
-        if 1 <= index <= len(choices):
-            return choices[index - 1]
-        return raw
+            pass
+    _stdout_line(prompt)
+    numbered = list(enumerate(choices, start=1))
+    if "provider" in prompt.lower():
+        oauth_rows: list[tuple[int, str]] = []
+        regular_rows: list[tuple[int, str]] = []
+        for idx, choice in numbered:
+            provider_token = choice.split(" ", 1)[0].strip()
+            if canonical_provider_name(provider_token) in oauth_provider_names():
+                oauth_rows.append((idx, choice))
+            else:
+                regular_rows.append((idx, choice))
+        if regular_rows:
+            _stdout_line("  API key providers:")
+            for idx, choice in regular_rows:
+                marker = " (default)" if choice == default else ""
+                _stdout_line(f"    {idx}) {choice}{marker}")
+        if oauth_rows:
+            _stdout_line("  OAuth providers (login required, no API key input):")
+            for idx, choice in oauth_rows:
+                marker = " (default)" if choice == default else ""
+                _stdout_line(f"    {idx}) {choice}{marker}")
+            _stdout_line("    Use: openheron provider login <provider-name>")
+    else:
+        for idx, choice in numbered:
+            marker = " (default)" if choice == default else ""
+            _stdout_line(f"  {idx}) {choice}{marker}")
+    raw = input("Select one (index/name, Enter=default)> ").strip()
+    if not raw:
+        return default
+    try:
+        index = int(raw)
+    except Exception:
+        index = -1
+    if 1 <= index <= len(choices):
+        return choices[index - 1]
+    return raw
 
 
 def _interactive_install_secret(prompt: str) -> str:
     """Read one secret install value, using questionary password when available."""
 
-    try:
-        import questionary  # type: ignore
+    if _can_use_questionary():
+        try:
+            import questionary  # type: ignore
 
-        answer = questionary.password(prompt).ask()
-        return str(answer or "")
-    except Exception:
-        return input(prompt)
+            answer = questionary.password(prompt).ask()
+            return str(answer or "")
+        except Exception:
+            pass
+    return input(prompt)
 
 
 def _interactive_install_multi_select(prompt: str, choices: list[str], defaults: list[str]) -> list[str]:
     """Read multi-select install options, using questionary when available."""
 
-    try:
-        import questionary  # type: ignore
+    if _can_use_questionary():
+        try:
+            import questionary  # type: ignore
 
-        answer = questionary.checkbox(prompt, choices=choices, default=defaults).ask()
-        if not answer:
-            return []
-        return [str(item) for item in answer]
-    except Exception:
-        _stdout_line(prompt)
-        for idx, choice in enumerate(choices, start=1):
-            marker = " (default)" if choice in defaults else ""
-            _stdout_line(f"  {idx}) {choice}{marker}")
-        raw = input("Select many (e.g. 1,3 or name1,name2; Enter=defaults)> ").strip()
-        if not raw:
-            return list(defaults)
-        tokens = _parse_csv_list(raw)
-        selected: list[str] = []
-        for token in tokens:
-            try:
-                index = int(token)
-            except Exception:
-                index = -1
-            if 1 <= index <= len(choices):
-                item = choices[index - 1]
-            else:
-                item = token
-            if item not in selected:
-                selected.append(item)
-        return selected
+            answer = questionary.checkbox(prompt, choices=choices, default=defaults).ask()
+            if not answer:
+                return []
+            return [str(item) for item in answer]
+        except Exception:
+            pass
+    _stdout_line(prompt)
+    for idx, choice in enumerate(choices, start=1):
+        marker = " (default)" if choice in defaults else ""
+        _stdout_line(f"  {idx}) {choice}{marker}")
+    raw = input("Select many (e.g. 1,3 or name1,name2; Enter=defaults)> ").strip()
+    if not raw:
+        return list(defaults)
+    tokens = _parse_csv_list(raw)
+    selected: list[str] = []
+    for token in tokens:
+        try:
+            index = int(token)
+        except Exception:
+            index = -1
+        if 1 <= index <= len(choices):
+            item = choices[index - 1]
+        else:
+            item = token
+        if item not in selected:
+            selected.append(item)
+    return selected
 
 
 def _install_summary_lines(config_path: Path) -> list[str]:

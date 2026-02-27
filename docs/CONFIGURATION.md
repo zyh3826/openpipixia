@@ -20,7 +20,7 @@
 - `agent.workspace` / `agent.builtinSkillsDir`
 - `providers.<provider>.enabled / apiKey / model / apiBase / extraHeaders`
 - `multimodalProviders.<name>.enabled / apiKey / model / apiBase / extraHeaders`
-- `gui.groundingProvider / gui.plannerProvider`（绑定到 `multimodalProviders` 名称）
+- `gui.groundingProvider / gui.plannerProvider / gui.builtinToolsEnabled`（绑定到 `multimodalProviders` 名称）
 - `session.dbUrl`
 - `channels.<name>.*`
 - `web.enabled` / `web.search.*`
@@ -91,6 +91,9 @@ Provider 选择由 `enabled` 控制，建议保持“仅一个 provider 为 true
 - `OPENHERON_MCP_PROBE_RETRY_BACKOFF_SECONDS`
 - `OPENHERON_MCP_DOCTOR_TIMEOUT_SECONDS`
 - `OPENHERON_MCP_GATEWAY_TIMEOUT_SECONDS`
+- `OPENHERON_GUI_MCP_NAME`
+- `OPENHERON_GUI_MCP_TRANSPORT`
+- `OPENHERON_GUI_BUILTIN_TOOLS_ENABLED`
 
 ### GUI Automation
 
@@ -287,6 +290,13 @@ export OPENHERON_GUI_ALLOW_DANGEROUS_KEYS=false
           "@modelcontextprotocol/server-filesystem",
           "/absolute/path/to/workspace"
         ]
+      },
+      "openheron_gui": {
+        "enabled": true,
+        "command": "openheron-gui-mcp",
+        "args": [],
+        "toolNamePrefix": "mcp_gui_",
+        "requireConfirmation": true
       }
     }
   },

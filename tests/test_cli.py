@@ -9,11 +9,62 @@ import tempfile
 import types as pytypes
 import unittest
 import asyncio
+import io
 import sys
 import builtins
 import datetime as dt
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
+
+_ORIGINAL_STDOUT: io.TextIOBase | None = None
+_ORIGINAL_STDERR: io.TextIOBase | None = None
+_CAPTURE_STDOUT: io.StringIO | None = None
+_CAPTURE_STDERR: io.StringIO | None = None
+
+
+def setUpModule() -> None:
+    """Silence noisy CLI prints during test execution."""
+    global _ORIGINAL_STDOUT, _ORIGINAL_STDERR, _CAPTURE_STDOUT, _CAPTURE_STDERR
+    _ORIGINAL_STDOUT = sys.stdout
+    _ORIGINAL_STDERR = sys.stderr
+    _CAPTURE_STDOUT = io.StringIO()
+    _CAPTURE_STDERR = io.StringIO()
+    sys.stdout = _CAPTURE_STDOUT
+    sys.stderr = _CAPTURE_STDERR
+
+
+def tearDownModule() -> None:
+    """Close leaked asyncio loops from optional channel dependencies."""
+    global _ORIGINAL_STDOUT, _ORIGINAL_STDERR, _CAPTURE_STDOUT, _CAPTURE_STDERR
+
+    try:
+        import lark_oapi.ws.client as lark_ws_client  # type: ignore
+
+        leaked = getattr(lark_ws_client, "loop", None)
+        if leaked is not None and not leaked.is_running() and not leaked.is_closed():
+            leaked.close()
+    except Exception:
+        pass
+
+    # Fallback: close current default loop if one is still open.
+    try:
+        loop = asyncio.get_event_loop_policy().get_event_loop()
+    except Exception:
+        return
+    try:
+        if not loop.is_running() and not loop.is_closed():
+            loop.close()
+    finally:
+        try:
+            asyncio.set_event_loop(None)
+        except Exception:
+            pass
+    if _ORIGINAL_STDOUT is not None:
+        sys.stdout = _ORIGINAL_STDOUT
+    if _ORIGINAL_STDERR is not None:
+        sys.stderr = _ORIGINAL_STDERR
+    _CAPTURE_STDOUT = None
+    _CAPTURE_STDERR = None
 
 
 class CLITests(unittest.TestCase):
@@ -1161,6 +1212,42 @@ class CLITests(unittest.TestCase):
         self.assertEqual(ok_line, "Install prereq [ok]: virtualenv detected at /tmp/.venv")
         self.assertEqual(warn_line, "Install prereq [warn]: adk CLI not found")
 
+    def test_gui_execution_path_hint_variants(self) -> None:
+        from openheron import cli
+
+        self.assertEqual(
+            cli._gui_execution_path_hint(
+                builtin_tools_enabled=True,
+                gui_task_tool="mcp_gui_gui_task",
+                gui_action_tool="mcp_gui_gui_action",
+            )[0],
+            "hybrid_prefer_mcp",
+        )
+        self.assertEqual(
+            cli._gui_execution_path_hint(
+                builtin_tools_enabled=True,
+                gui_task_tool=None,
+                gui_action_tool=None,
+            )[0],
+            "builtin_only",
+        )
+        self.assertEqual(
+            cli._gui_execution_path_hint(
+                builtin_tools_enabled=False,
+                gui_task_tool="mcp_gui_gui_task",
+                gui_action_tool="mcp_gui_gui_action",
+            )[0],
+            "mcp_only",
+        )
+        self.assertEqual(
+            cli._gui_execution_path_hint(
+                builtin_tools_enabled=False,
+                gui_task_tool=None,
+                gui_action_tool=None,
+            )[0],
+            "disabled",
+        )
+
     def test_cmd_gateway_service_install_writes_launchd_manifest(self) -> None:
         from openheron import cli
 
@@ -1351,7 +1438,22 @@ class CLITests(unittest.TestCase):
                     ["local", "feishu", "telegram"],
                     ["local"],
                 )
-        self.assertEqual(answer, ["local", "feishu"])
+                self.assertEqual(answer, ["local", "feishu"])
+
+    def test_can_use_questionary_returns_false_without_tty(self) -> None:
+        from openheron import cli
+
+        with patch.object(cli.sys.stdin, "isatty", return_value=False):
+            with patch.object(cli.sys.stdout, "isatty", return_value=True):
+                self.assertFalse(cli._can_use_questionary())
+
+    def test_interactive_install_select_skips_questionary_when_not_tty(self) -> None:
+        from openheron import cli
+
+        with patch.object(cli, "_can_use_questionary", return_value=False):
+            with patch("builtins.input", return_value=""):
+                answer = cli._interactive_install_select("Choose provider", ["google", "openai"], "google")
+        self.assertEqual(answer, "google")
 
     def test_cmd_install_returns_failure_when_doctor_fails(self) -> None:
         from openheron import cli
@@ -2083,6 +2185,7 @@ class CLITests(unittest.TestCase):
         self.assertEqual(code, 0)
         lines = [call.args[0] for call in mocked_print.call_args_list if call.args]
         self.assertTrue(any("Heartbeat: last_status=ran, last_reason=exec:foreground" in line for line in lines))
+        self.assertTrue(any("GUI runtime: mode=builtin_only" in line for line in lines))
         self.assertTrue(any("Environment looks good." in line for line in lines))
 
     def test_cmd_doctor_text_output_includes_install_prereqs(self) -> None:
