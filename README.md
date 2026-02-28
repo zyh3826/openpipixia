@@ -1,28 +1,21 @@
 <div align="center">
  <img src="assets/openheron_logo_2.png" alt="openheron" width="500">
-  <h1>OpenHeron: A Lightweight Personal AI Assistant</h1>
+  <h1>OpenHeron: A Lightweight Personal AI Assistant 🚀</h1>
 </div>
 
+## News ✨
+
+- 2026-02-18: V0.2 released with multi-agent and GUI operation support.
+
+- 2026-02-12: Initial version released with single-agent support.
+
+## Key Features
+
+- Multi-agent support and compatibility with common providers.
+- Agents can operate the OS with computer-use tools.
 
 
-## Overview
-
-`openheron` is designed to be practical and easy to iterate.
-
-Core focus areas:
-
-- Multi-channel gateway runtime
-- Local skill loading from `SKILL.md`
-- Built-in tools (file/shell/web/message/cron/subagent)
-- Persistent sessions with optional long-term memory
-- Multi-agent and multi-provider support
-
-## Prerequisites
-
-- Python 3.14
-- A virtual environment is strongly recommended (examples below use `.venv`)
-
-## Quick Start
+## Quick Start 🧭
 
 ### 1. Set Up the Environment and Initialize
 ```bash
@@ -71,7 +64,7 @@ openheron --config-path ~/.openheron/agent_name_1/config.json gateway run --chan
 
 ### 4. Enable Channel Chat and Start Background Service
 
-For channel keys and secrets, see docs/CHANNELS.md. After filling channel keys, start the background gateway for regular usage:
+For channel keys and secrets, see `docs/CHANNELS.md`. After filling in channel keys, start the background gateway for regular usage:
 
 ```bash
 openheron gateway start
@@ -94,7 +87,7 @@ openheron token --help
 
 ## Gateway Usage
 
-- `openheron gateway run`: run the gateway in foreground
+- `openheron gateway run`: run the gateway in the foreground
 - `openheron gateway start|stop|restart|status`: start, stop, restart, and inspect the background gateway process
 - `openheron gateway-service`: manage OS user-service manifests (launchd/systemd)
 
@@ -115,13 +108,13 @@ openheron gateway-service status
 export OPENHERON_GUI_MODEL=$NAME_OF_YOUR_MLLM
 export OPENHERON_GUI_PLANNER_MODEL=$NAME_OF_YOUR_MLLM
 export OPENHERON_GUI_GROUNDING_PROVIDER=openai
-export OPENAI_API_KEY=your_api_key   # for openai provider
+export OPENAI_API_KEY=your_api_key   # for OpenAI provider
 ```
 
 - `OPENHERON_GUI_MODEL`: multi-modal model used for low-level GUI grounding/actions
 - `OPENHERON_GUI_PLANNER_MODEL`: multi-modal model used for multi-step planning
 - `OPENHERON_GUI_GROUNDING_PROVIDER`: provider used by GUI grounding/planner key lookup
-- provider API key env: depends on provider (for example `OPENAI_API_KEY` / `GOOGLE_API_KEY`)
+- Provider API key env var: depends on provider (for example `OPENAI_API_KEY` / `GOOGLE_API_KEY`)
 
 GUI smoke examples:
 
