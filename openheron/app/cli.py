@@ -2206,6 +2206,9 @@ def _cmd_init(*, force: bool) -> int:
     results = _run_multi_agent_init_setup(force=force)
     global_config_path = _write_init_global_config()
 
+    if _render_init_sections_with_rich(results=results, global_config_path=global_config_path, force=force):
+        return 0
+
     _stdout_line(f"Initialized multi-agent config: agents={len(results)}")
     for agent_name, result in results:
         _init_workspace_support_files(workspace=result.workspace, force=force)
@@ -2230,11 +2233,106 @@ def _cmd_init(*, force: bool) -> int:
     _stdout_line("- HEARTBEAT.md: periodic tasks to execute during heartbeat runs.")
     _stdout_line("- skills/: place per-agent local skills (each skill as <name>/SKILL.md).")
     _stdout_line("Next steps:")
-    _stdout_line("1. openheron doctor")
+    _stdout_line("1. Configure related config files (global_config.json and per-agent config/runtime/workspace files).")
+    _stdout_line("2. openheron doctor  # check whether current config is valid and runnable")
     _stdout_line(
-        f"2. openheron --config-path {str(_agent_config_path(_INIT_DEFAULT_AGENT_NAMES[0]))} gateway run --channels local --interactive-local"
+        "3. openheron --config-path "
+        f"{str(_agent_config_path(_INIT_DEFAULT_AGENT_NAMES[0]))} "
+        "gateway run --channels local --interactive-local "
+        "# try local interactive experience first"
     )
+    _stdout_line("4. openheron gateway start  # start real background gateway service journey")
     return 0
+
+
+def _render_init_sections_with_rich(
+    *,
+    results: list[tuple[str, InstallInitResult]],
+    global_config_path: Path,
+    force: bool,
+) -> bool:
+    """Render init output in rich format when terminal supports it."""
+    if not sys.stdout.isatty():
+        return False
+    try:
+        from rich.console import Console  # type: ignore
+        from rich.panel import Panel  # type: ignore
+        from rich.table import Table  # type: ignore
+    except Exception:
+        return False
+
+    for _agent_name, result in results:
+        _init_workspace_support_files(workspace=result.workspace, force=force)
+
+    console = Console()
+
+    summary = Table(show_header=False, box=None, pad_edge=False)
+    summary.add_column("key", style="bold cyan", no_wrap=True)
+    summary.add_column("value", style="white")
+    summary.add_row("Agents initialized", str(len(results)))
+    summary.add_row("Global config", str(global_config_path))
+    summary.add_row("Enabled by default", _INIT_DEFAULT_AGENT_NAMES[0])
+    summary.add_row("Editable", "global_config.json + each agent config/runtime/workspace files")
+    console.print(Panel(summary, title="[bold]Openheron Init[/bold]", border_style="cyan"))
+
+    detail = Table(show_header=True, box=None, pad_edge=False)
+    detail.add_column("Agent", style="bold green")
+    detail.add_column("Config")
+    detail.add_column("Runtime")
+    detail.add_column("Workspace")
+    for agent_name, result in results:
+        detail.add_row(
+            agent_name,
+            str(result.config_path),
+            str(result.runtime_config_path),
+            str(result.workspace),
+        )
+    console.print(Panel(detail, title="[bold]Per-agent Files[/bold]", border_style="green"))
+
+    purpose = Table(show_header=True, box=None, pad_edge=False)
+    purpose.add_column("File/Dir", style="bold yellow", no_wrap=True)
+    purpose.add_column("Purpose")
+    purpose.add_row("AGENTS.md", "Agent engineering rules and execution constraints.")
+    purpose.add_row("SOUL.md", "Personality and behavior style guidance.")
+    purpose.add_row("TOOLS.md", "Tool usage policy and guardrails.")
+    purpose.add_row("IDENTITY.md", "Role definition and responsibility boundaries.")
+    purpose.add_row("USER.md", "User profile and collaboration preferences.")
+    purpose.add_row("HEARTBEAT.md", "Periodic tasks to execute during heartbeat runs.")
+    purpose.add_row("skills/", "Per-agent local skills (<name>/SKILL.md).")
+    purpose.add_row("memory/MEMORY.md", "Long-term facts and preferences.")
+    purpose.add_row("memory/HISTORY.md", "Append-only interaction transcript.")
+    console.print(Panel(purpose, title="[bold]Workspace Files[/bold]", border_style="yellow"))
+
+    next_steps = Table(show_header=True, box=None, pad_edge=False)
+    next_steps.add_column("Step", style="bold blue", no_wrap=True)
+    next_steps.add_column("Action", style="white")
+    next_steps.add_column("Purpose", style="cyan")
+    next_steps.add_row(
+        "1",
+        "Edit global_config.json + per-agent config/runtime/workspace files",
+        "Prepare your multi-agent configuration.",
+    )
+    next_steps.add_row(
+        "2",
+        "openheron doctor",
+        "Validate config and runtime readiness.",
+    )
+    next_steps.add_row(
+        "3",
+        (
+            "openheron --config-path "
+            f"{str(_agent_config_path(_INIT_DEFAULT_AGENT_NAMES[0]))} "
+            "gateway run --channels local --interactive-local"
+        ),
+        "Try local interactive mode first.",
+    )
+    next_steps.add_row(
+        "4",
+        "openheron gateway start",
+        "Start background gateway for daily usage.",
+    )
+    console.print(Panel(next_steps, title="[bold]Next Steps[/bold]", border_style="blue"))
+    return True
 
 
 InstallChannelPromptRule = install_rules.InstallChannelPromptRule
