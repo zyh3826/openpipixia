@@ -35,8 +35,8 @@ if ! command -v openheron >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "[smoke] running install --non-interactive ${FORCE_FLAG}"
-openheron install --non-interactive ${FORCE_FLAG}
+echo "[smoke] running install ${FORCE_FLAG}"
+openheron install ${FORCE_FLAG}
 
 echo "[smoke] running doctor"
 openheron doctor

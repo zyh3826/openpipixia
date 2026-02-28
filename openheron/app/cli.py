@@ -35,14 +35,9 @@ from ..core.config import (
     save_runtime_config,
 )
 from ..core.env_utils import env_enabled, is_enabled
-from ..core import doctor_rules, install_rules
+from ..core import doctor_rules
 from ..core.logging_utils import debug_logging_enabled, emit_debug
 from ..core.gui_mcp import resolve_gui_mcp_from_env, resolve_gui_mcp_from_summaries
-from ..core.onboarding_adapters import (
-    ApiKeyProviderOnboardingAdapter,
-    resolve_channel_onboarding_adapter,
-    resolve_provider_onboarding_adapter,
-)
 from ..core.provider import (
     DEFAULT_PROVIDER,
     canonical_provider_name,
@@ -910,20 +905,20 @@ def _doctor_backfill_provider_api_key_from_env(
     if not isinstance(item, dict):
         return
 
-    for requirement in install_rules.INSTALL_PROVIDER_SUMMARY_REQUIREMENTS:
-        if requirement.env_name_resolver is None:
-            continue
-        env_name = requirement.env_name_resolver(active_provider) if requirement.env_name_resolver else ""
-        env_value = os.getenv(env_name, "").strip() if env_name else ""
-        if env_value and not str(item.get(requirement.key, "")).strip():
-            item[requirement.key] = env_value
-            _doctor_add_change(
-                changes,
-                event_sink=event_sink,
-                code=requirement.doctor_env_backfill_code or "provider.env.backfilled",
-                rule=requirement.doctor_env_backfill_rule,
-                message=f"providers.{active_provider}.{requirement.key} <- {env_name}",
-            )
+    provider_spec = find_provider_spec(active_provider)
+    if provider_spec and provider_spec.is_oauth:
+        return
+    env_name = provider_api_key_env(active_provider)
+    env_value = os.getenv(env_name, "").strip() if env_name else ""
+    if env_value and not str(item.get("apiKey", "")).strip():
+        item["apiKey"] = env_value
+        _doctor_add_change(
+            changes,
+            event_sink=event_sink,
+            code="provider.env.api_key_backfilled",
+            rule="provider_env_backfill",
+            message=f"providers.{active_provider}.apiKey <- {env_name}",
+        )
 
 
 def _doctor_apply_minimal_fixes(
@@ -2335,463 +2330,6 @@ def _render_init_sections_with_rich(
     return True
 
 
-InstallChannelPromptRule = install_rules.InstallChannelPromptRule
-InstallProviderSummaryRequirement = install_rules.InstallProviderSummaryRequirement
-InstallChannelSummaryRequirement = install_rules.InstallChannelSummaryRequirement
-INSTALL_CHANNEL_PROMPT_RULES = install_rules.INSTALL_CHANNEL_PROMPT_RULES
-INSTALL_CHANNEL_SUMMARY_REQUIREMENTS = install_rules.build_install_channel_summary_requirements()
-INSTALL_PROVIDER_SUMMARY_REQUIREMENTS = install_rules.INSTALL_PROVIDER_SUMMARY_REQUIREMENTS
-
-
-def _build_install_channel_summary_requirements() -> tuple[InstallChannelSummaryRequirement, ...]:
-    """Compatibility wrapper: delegate summary requirement build to install rules module."""
-
-    return install_rules.build_install_channel_summary_requirements()
-
-
-def _install_summary_provider_missing(*, selected_provider: str, provider_cfg: dict[str, Any]) -> list[str]:
-    """Compatibility wrapper: delegate provider missing checks to install rules module."""
-
-    return install_rules.install_summary_provider_missing(
-        selected_provider=selected_provider,
-        provider_cfg=provider_cfg,
-        requirements=INSTALL_PROVIDER_SUMMARY_REQUIREMENTS,
-    )
-
-
-def _install_summary_provider_fix_hints(*, selected_provider: str, config_path: Path) -> dict[str, str]:
-    """Compatibility wrapper: delegate provider hint rendering to install rules module."""
-
-    return install_rules.install_summary_provider_fix_hints(
-        selected_provider=selected_provider,
-        config_path=config_path,
-        requirements=INSTALL_PROVIDER_SUMMARY_REQUIREMENTS,
-    )
-
-
-def _install_channel_value_missing(
-    *,
-    cfg: dict[str, Any],
-    key: str,
-    presence: Literal["truthy_bool", "non_empty_strip", "non_empty_raw"],
-) -> bool:
-    """Compatibility wrapper: delegate channel missing predicate to install rules module."""
-
-    return install_rules.install_channel_value_missing(cfg=cfg, key=key, presence=presence)
-
-
-def _install_summary_channel_missing(channels_cfg: dict[str, Any]) -> list[str]:
-    """Compatibility wrapper: delegate channel missing checks to install rules module."""
-
-    return install_rules.install_summary_channel_missing(
-        channels_cfg=channels_cfg,
-        requirements=INSTALL_CHANNEL_SUMMARY_REQUIREMENTS,
-    )
-
-
-def _install_summary_channel_fix_hints(config_path: Path) -> dict[str, str]:
-    """Compatibility wrapper: delegate channel hint rendering to install rules module."""
-
-    return install_rules.install_summary_channel_fix_hints(
-        config_path=config_path,
-        requirements=INSTALL_CHANNEL_SUMMARY_REQUIREMENTS,
-    )
-
-
-def _install_summary_missing(
-    *,
-    selected_provider: str,
-    provider_cfg: dict[str, Any],
-    channels_cfg: dict[str, Any],
-) -> list[str]:
-    """Compatibility wrapper: delegate missing aggregation to install rules module."""
-
-    return install_rules.install_summary_missing(
-        selected_provider=selected_provider,
-        provider_cfg=provider_cfg,
-        channels_cfg=channels_cfg,
-        provider_requirements=INSTALL_PROVIDER_SUMMARY_REQUIREMENTS,
-        channel_requirements=INSTALL_CHANNEL_SUMMARY_REQUIREMENTS,
-    )
-
-
-def _install_summary_fix_hints(*, missing: list[str], selected_provider: str, config_path: Path) -> list[str]:
-    """Compatibility wrapper: delegate fix-hint rendering to install rules module."""
-
-    return install_rules.install_summary_fix_hints(
-        missing=missing,
-        selected_provider=selected_provider,
-        config_path=config_path,
-        provider_requirements=INSTALL_PROVIDER_SUMMARY_REQUIREMENTS,
-        channel_requirements=INSTALL_CHANNEL_SUMMARY_REQUIREMENTS,
-    )
-
-
-def _apply_install_channel_prompt_rules(
-    *,
-    channels_cfg: dict[str, Any],
-    enabled_channels: list[str],
-    input_fn: Callable[[str], str],
-    secret_input_fn: Callable[[str], str] | None = None,
-) -> None:
-    """Compatibility wrapper: delegate channel credential prompts to install rules module."""
-
-    install_rules.apply_install_channel_prompt_rules(
-        channels_cfg=channels_cfg,
-        enabled_channels=enabled_channels,
-        input_fn=input_fn,
-        secret_input_fn=secret_input_fn,
-    )
-
-
-def _active_provider_name(providers_cfg: dict[str, Any]) -> str:
-    """Resolve currently enabled provider from config payload."""
-    for name in provider_names():
-        item = providers_cfg.get(name, {})
-        if isinstance(item, dict) and bool(item.get("enabled")):
-            return name
-    return DEFAULT_PROVIDER
-
-
-def _provider_choice_label(*, name: str, cfg: dict[str, Any], is_current: bool) -> str:
-    """Build one provider select label with minimal noise."""
-    if is_current:
-        return f"{name} (current)"
-    return name
-
-
-def _channel_missing_count(channel_name: str, channel_cfg: dict[str, Any]) -> int:
-    """Return required missing field count for one channel config snapshot."""
-    count = 0
-    for requirement in INSTALL_CHANNEL_SUMMARY_REQUIREMENTS:
-        if requirement.channel != channel_name:
-            continue
-        if install_rules.install_channel_value_missing(
-            cfg=channel_cfg,
-            key=requirement.key,
-            presence=requirement.presence,
-        ):
-            count += 1
-    return count
-
-
-def _channel_choice_label(*, name: str, cfg: dict[str, Any], enabled_now: bool) -> str:
-    """Build one channel multi-select label with readiness signal."""
-    enabled_tag = "enabled" if enabled_now else "disabled"
-    if name == "local":
-        readiness = "ready"
-    else:
-        missing = _channel_missing_count(name, cfg)
-        readiness = "ready" if missing == 0 else f"missing:{missing}"
-    return f"{name} [{enabled_tag}] [{readiness}]"
-
-
-def _install_snapshot_state(config: dict[str, Any]) -> tuple[str, list[str], list[str]]:
-    """Collect provider/channels/missing snapshot for install UI rendering."""
-    providers_cfg = config.get("providers", {})
-    provider_cfg_dict = providers_cfg if isinstance(providers_cfg, dict) else {}
-    selected_provider = _active_provider_name(provider_cfg_dict)
-
-    channels_cfg = config.get("channels", {})
-    channels_cfg_dict = channels_cfg if isinstance(channels_cfg, dict) else {}
-    enabled_channels: list[str] = []
-    for name, item in channels_cfg_dict.items():
-        if isinstance(item, dict) and bool(item.get("enabled")):
-            enabled_channels.append(str(name))
-
-    missing = install_rules.install_summary_missing(
-        selected_provider=selected_provider,
-        provider_cfg=provider_cfg_dict,
-        channels_cfg=channels_cfg_dict,
-        provider_requirements=INSTALL_PROVIDER_SUMMARY_REQUIREMENTS,
-        channel_requirements=INSTALL_CHANNEL_SUMMARY_REQUIREMENTS,
-    )
-    return selected_provider, enabled_channels, missing
-
-
-def _render_install_interactive_snapshot_with_rich(*, title: str, config: dict[str, Any]) -> bool:
-    """Render one compact two-panel install snapshot in interactive setup."""
-    if not sys.stdout.isatty():
-        return False
-    try:
-        from rich.columns import Columns  # type: ignore
-        from rich.console import Console  # type: ignore
-        from rich.panel import Panel  # type: ignore
-        from rich.table import Table  # type: ignore
-    except Exception:
-        return False
-
-    selected_provider, enabled_channels, missing = _install_snapshot_state(config)
-
-    summary_table = Table(show_header=False, box=None, pad_edge=False)
-    summary_table.add_column("key", style="bold cyan", no_wrap=True)
-    summary_table.add_column("value", style="white")
-    summary_table.add_row("Provider", selected_provider)
-    summary_table.add_row("Channels", ", ".join(enabled_channels) if enabled_channels else "(none)")
-    summary_table.add_row("Missing", str(len(missing)))
-    summary_panel = Panel(summary_table, title="[bold]Current Selection[/bold]", border_style="cyan")
-
-    checklist_table = Table(show_header=False, box=None, pad_edge=False)
-    checklist_table.add_column("item", style="yellow")
-    if missing:
-        for item in missing[:8]:
-            checklist_table.add_row(f"□ {item}")
-        if len(missing) > 8:
-            checklist_table.add_row(f"... {len(missing) - 8} more")
-    else:
-        checklist_table.add_row("[green]✓ Required fields look good[/green]")
-    checklist_panel = Panel(checklist_table, title="[bold]Checklist[/bold]", border_style="yellow")
-
-    console = Console()
-    console.print(Panel(f"[bold]{title}[/bold]", border_style="blue"))
-    console.print(Columns([summary_panel, checklist_panel], equal=True, expand=True))
-    return True
-
-
-def _review_install_missing_fields(
-    *,
-    providers_cfg: dict[str, Any],
-    channels_cfg: dict[str, Any],
-    input_fn: Callable[[str], str],
-    secret_input_fn: Callable[[str], str] | None = None,
-) -> None:
-    """Offer one guided pass to fill missing required fields for enabled items."""
-    selected_provider = _active_provider_name(providers_cfg)
-    provider_cfg = providers_cfg if isinstance(providers_cfg, dict) else {}
-    channel_cfg = channels_cfg if isinstance(channels_cfg, dict) else {}
-    max_rounds = 2
-    rounds = 0
-    while rounds < max_rounds:
-        missing = install_rules.install_summary_missing(
-            selected_provider=selected_provider,
-            provider_cfg=provider_cfg,
-            channels_cfg=channel_cfg,
-            provider_requirements=INSTALL_PROVIDER_SUMMARY_REQUIREMENTS,
-            channel_requirements=INSTALL_CHANNEL_SUMMARY_REQUIREMENTS,
-        )
-        if not missing:
-            return
-
-        _stdout_line("Install setup: still missing required fields for enabled provider/channels:")
-        for item in missing:
-            _stdout_line(f"- {item}")
-        answer = input_fn("Install setup: fill these missing fields now? (Y/n)> ").strip().lower()
-        if answer in {"n", "no"}:
-            return
-
-        if f"{selected_provider}.apiKey" in missing:
-            provider_adapter = resolve_provider_onboarding_adapter(selected_provider)
-            key_env = provider_api_key_env(selected_provider)
-            provider_spec = find_provider_spec(selected_provider)
-            if provider_adapter is None and key_env and not (provider_spec and provider_spec.is_oauth):
-                provider_adapter = ApiKeyProviderOnboardingAdapter(
-                    provider_name=selected_provider,
-                    prompt=f"API key for {selected_provider} (required for enabled provider)> ",
-                )
-            if provider_adapter is not None and isinstance(provider_cfg.get(selected_provider), dict):
-                provider_adapter.collect_credentials(
-                    provider_cfg=provider_cfg[selected_provider],
-                    input_fn=input_fn,
-                    secret_input_fn=secret_input_fn,
-                )
-
-        channels_to_review: list[str] = []
-        for item in missing:
-            if not item.startswith("channels."):
-                continue
-            parts = item.split(".")
-            if len(parts) < 3:
-                continue
-            channel_name = parts[1]
-            if channel_name not in channels_to_review:
-                channels_to_review.append(channel_name)
-        if channels_to_review:
-            install_rules.apply_install_channel_prompt_rules(
-                channels_cfg=channel_cfg,
-                enabled_channels=channels_to_review,
-                input_fn=input_fn,
-                secret_input_fn=secret_input_fn,
-            )
-        rounds += 1
-
-
-def _run_install_interactive_setup(
-    *,
-    config_path: Path,
-    input_fn: Callable[[str], str],
-    select_fn: Callable[[str, list[str], str], str] | None = None,
-    secret_input_fn: Callable[[str], str] | None = None,
-    multi_select_fn: Callable[[str, list[str], list[str]], list[str]] | None = None,
-    review_missing: bool = False,
-) -> None:
-    """Collect minimal interactive install choices and persist config changes."""
-
-    config = load_config(config_path=config_path)
-    _render_install_interactive_snapshot_with_rich(title="Setup: Provider", config=config)
-    providers_cfg = config.get("providers", {})
-    available = [name for name in provider_names() if name in providers_cfg]
-    if not available:
-        return
-    enabled_now = next((name for name in available if providers_cfg.get(name, {}).get("enabled")), available[0])
-    labels = [
-        _provider_choice_label(
-            name=name,
-            cfg=providers_cfg.get(name, {}) if isinstance(providers_cfg.get(name, {}), dict) else {},
-            is_current=(name == enabled_now),
-        )
-        for name in available
-    ]
-    label_to_provider = {label: name for label, name in zip(labels, available)}
-
-    attempts = 0
-    while attempts < 3:
-        if select_fn is not None:
-            raw_provider = select_fn(
-                "Choose provider (status shown as current/enabled/credential)",
-                [*labels, "skip"],
-                next((label for label in labels if label_to_provider[label] == enabled_now), labels[0]),
-            ).strip()
-        else:
-            _stdout_line(
-                f"Install setup: choose provider {available} (current: {enabled_now}, Enter keeps current, 'skip' to skip)."
-            )
-            raw_provider = input_fn("Provider> ").strip()
-        if not raw_provider or raw_provider.lower() == "skip":
-            break
-        selected = label_to_provider.get(raw_provider)
-        if not selected:
-            selected = canonical_provider_name(raw_provider)
-        if selected in available:
-            for name in available:
-                providers_cfg[name]["enabled"] = name == selected
-            enabled_now = selected
-            selected_cfg = providers_cfg.get(selected, {})
-            if not isinstance(selected_cfg, dict):
-                selected_cfg = {}
-            _stdout_line(
-                "Install setup: provider selected -> "
-                f"{_provider_choice_label(name=selected, cfg=selected_cfg, is_current=True)}"
-            )
-            break
-        attempts += 1
-        _stdout_line(f"Install setup: unknown provider '{raw_provider}', try again or input 'skip'.")
-
-    key_env = provider_api_key_env(enabled_now)
-    provider_spec = find_provider_spec(enabled_now)
-    provider_adapter = resolve_provider_onboarding_adapter(enabled_now)
-    if provider_adapter is None and key_env and not (provider_spec and provider_spec.is_oauth):
-        provider_adapter = ApiKeyProviderOnboardingAdapter(
-            provider_name=enabled_now,
-            prompt=f"API key for {enabled_now} (recommended now, press Enter to skip for now)> ",
-        )
-    if provider_adapter is not None:
-        provider_adapter.collect_credentials(
-            provider_cfg=providers_cfg[enabled_now],
-            input_fn=input_fn,
-            secret_input_fn=secret_input_fn,
-        )
-
-    channels_cfg = config.get("channels", {})
-    if isinstance(channels_cfg, dict):
-        _render_install_interactive_snapshot_with_rich(title="Setup: Channels", config=config)
-        channel_names = [
-            str(name)
-            for name, item in channels_cfg.items()
-            if isinstance(item, dict) and "enabled" in item
-        ]
-        enabled_channels = [
-            name for name in channel_names if bool(channels_cfg.get(name, {}).get("enabled"))
-        ]
-        if channel_names:
-            channel_labels = [
-                _channel_choice_label(
-                    name=name,
-                    cfg=channels_cfg.get(name, {}) if isinstance(channels_cfg.get(name, {}), dict) else {},
-                    enabled_now=(name in enabled_channels),
-                )
-                for name in channel_names
-            ]
-            label_to_channel = {label: name for label, name in zip(channel_labels, channel_names)}
-            raw_channels: list[str]
-            if multi_select_fn is not None:
-                defaults = [label for label in channel_labels if label_to_channel[label] in enabled_channels]
-                raw_channels = [
-                    str(item).strip()
-                    for item in multi_select_fn("Enable channels (status shown as enabled/readiness)", channel_labels, defaults)
-                ]
-            else:
-                _stdout_line(
-                    "Install setup: choose enabled channels "
-                    f"{channel_names} (comma separated, Enter keeps current)."
-                )
-                raw_text = input_fn("Channels> ").strip()
-                raw_channels = _parse_csv_list(raw_text) if raw_text else []
-            if raw_channels:
-                resolved_channels: list[str] = []
-                for raw in raw_channels:
-                    selected = label_to_channel.get(raw)
-                    if selected is None and raw in channel_names:
-                        selected = raw
-                    if selected and selected not in resolved_channels:
-                        resolved_channels.append(selected)
-                if not resolved_channels:
-                    _stdout_line("Install setup: no valid channels selected, keep current channels.")
-                else:
-                    for name in channel_names:
-                        channels_cfg[name]["enabled"] = name in resolved_channels
-                    if not any(bool(channels_cfg.get(name, {}).get("enabled")) for name in channel_names) and "local" in channel_names:
-                        channels_cfg["local"]["enabled"] = True
-                    selected_labels = [
-                        _channel_choice_label(
-                            name=name,
-                            cfg=channels_cfg.get(name, {}) if isinstance(channels_cfg.get(name, {}), dict) else {},
-                            enabled_now=bool(channels_cfg.get(name, {}).get("enabled")),
-                        )
-                        for name in channel_names
-                        if bool(channels_cfg.get(name, {}).get("enabled"))
-                    ]
-                    _stdout_line(
-                        "Install setup: enabled channels -> "
-                        + (", ".join(selected_labels) if selected_labels else "(none)")
-                    )
-        enabled_after = [name for name in channel_names if bool(channels_cfg.get(name, {}).get("enabled"))]
-        fallback_channels: list[str] = []
-        for channel_name in enabled_after:
-            channel_cfg = channels_cfg.get(channel_name, {})
-            if not isinstance(channel_cfg, dict):
-                continue
-            channel_adapter = resolve_channel_onboarding_adapter(channel_name)
-            if channel_adapter is None:
-                fallback_channels.append(channel_name)
-                continue
-            channel_adapter.collect_credentials(
-                channel_cfg=channel_cfg,
-                input_fn=input_fn,
-                secret_input_fn=secret_input_fn,
-            )
-        if fallback_channels:
-            install_rules.apply_install_channel_prompt_rules(
-                channels_cfg=channels_cfg,
-                enabled_channels=fallback_channels,
-                input_fn=input_fn,
-                secret_input_fn=secret_input_fn,
-            )
-
-    # Second guided pass: validate missing required fields and offer refill.
-    if review_missing:
-        _render_install_interactive_snapshot_with_rich(title="Setup: Review Missing Fields", config=config)
-        _review_install_missing_fields(
-            providers_cfg=providers_cfg if isinstance(providers_cfg, dict) else {},
-            channels_cfg=channels_cfg if isinstance(channels_cfg, dict) else {},
-            input_fn=input_fn,
-            secret_input_fn=secret_input_fn,
-        )
-        _render_install_interactive_snapshot_with_rich(title="Setup: Final", config=config)
-
-    save_config(config, config_path=config_path)
-    _stdout_line(f"Install setup saved: {config_path}")
-
-
 def _install_step_line(step: int, total: int, message: str) -> None:
     """Render one install step line, using rich style when available."""
 
@@ -2801,194 +2339,6 @@ def _install_step_line(step: int, total: int, message: str) -> None:
         rich_print(f"[bold cyan]Install step {step}/{total}:[/bold cyan] {message}")
     except Exception:
         _stdout_line(f"Install step {step}/{total}: {message}")
-
-
-def _interactive_install_input(prompt: str) -> str:
-    """Read one install input value, using questionary when available."""
-
-    if _can_use_questionary():
-        try:
-            import questionary  # type: ignore
-
-            answer = questionary.text(prompt).ask()
-            return str(answer or "")
-        except Exception:
-            pass
-    return input(prompt)
-
-
-def _can_use_questionary() -> bool:
-    """Return whether rich interactive questionary prompts should be used."""
-    try:
-        return bool(sys.stdin.isatty() and sys.stdout.isatty())
-    except Exception:
-        return False
-
-
-def _interactive_install_select(prompt: str, choices: list[str], default: str) -> str:
-    """Select one install option, using questionary when available."""
-
-    if _can_use_questionary():
-        import questionary  # type: ignore
-
-        try:
-            answer = questionary.select(prompt, choices=choices, default=default).ask()
-            return str(answer or "")
-        except Exception:
-            pass
-    _stdout_line(prompt)
-    numbered = list(enumerate(choices, start=1))
-    if "provider" in prompt.lower():
-        oauth_rows: list[tuple[int, str]] = []
-        regular_rows: list[tuple[int, str]] = []
-        for idx, choice in numbered:
-            provider_token = choice.split(" ", 1)[0].strip()
-            if canonical_provider_name(provider_token) in oauth_provider_names():
-                oauth_rows.append((idx, choice))
-            else:
-                regular_rows.append((idx, choice))
-        if regular_rows:
-            _stdout_line("  API key providers:")
-            for idx, choice in regular_rows:
-                marker = " (default)" if choice == default else ""
-                _stdout_line(f"    {idx}) {choice}{marker}")
-        if oauth_rows:
-            _stdout_line("  OAuth providers (login required, no API key input):")
-            for idx, choice in oauth_rows:
-                marker = " (default)" if choice == default else ""
-                _stdout_line(f"    {idx}) {choice}{marker}")
-            _stdout_line("    Use: openheron provider login <provider-name>")
-    else:
-        for idx, choice in numbered:
-            marker = " (default)" if choice == default else ""
-            _stdout_line(f"  {idx}) {choice}{marker}")
-    raw = input("Select one (index/name, Enter=default)> ").strip()
-    if not raw:
-        return default
-    try:
-        index = int(raw)
-    except Exception:
-        index = -1
-    if 1 <= index <= len(choices):
-        return choices[index - 1]
-    return raw
-
-
-def _interactive_install_secret(prompt: str) -> str:
-    """Read one secret install value, using questionary password when available."""
-
-    if _can_use_questionary():
-        try:
-            import questionary  # type: ignore
-
-            answer = questionary.password(prompt).ask()
-            return str(answer or "")
-        except Exception:
-            pass
-    return input(prompt)
-
-
-def _interactive_install_multi_select(prompt: str, choices: list[str], defaults: list[str]) -> list[str]:
-    """Read multi-select install options, using questionary when available."""
-
-    if _can_use_questionary():
-        try:
-            import questionary  # type: ignore
-
-            answer = questionary.checkbox(prompt, choices=choices, default=defaults).ask()
-            if not answer:
-                return []
-            return [str(item) for item in answer]
-        except Exception:
-            pass
-    _stdout_line(prompt)
-    for idx, choice in enumerate(choices, start=1):
-        marker = " (default)" if choice in defaults else ""
-        _stdout_line(f"  {idx}) {choice}{marker}")
-    raw = input("Select many (e.g. 1,3 or name1,name2; Enter=defaults)> ").strip()
-    if not raw:
-        return list(defaults)
-    tokens = _parse_csv_list(raw)
-    selected: list[str] = []
-    for token in tokens:
-        try:
-            index = int(token)
-        except Exception:
-            index = -1
-        if 1 <= index <= len(choices):
-            item = choices[index - 1]
-        else:
-            item = token
-        if item not in selected:
-            selected.append(item)
-    return selected
-
-
-def _install_summary_lines(config_path: Path) -> list[str]:
-    """Build short install summary lines for operator visibility."""
-
-    config = load_config(config_path=config_path)
-    provider_cfg = config.get("providers", {})
-    selected_provider = "-"
-    if isinstance(provider_cfg, dict):
-        for name, item in provider_cfg.items():
-            if isinstance(item, dict) and bool(item.get("enabled")):
-                selected_provider = str(name)
-                break
-
-    channels_cfg = config.get("channels", {})
-    enabled_channels: list[str] = []
-    if isinstance(channels_cfg, dict):
-        for name, item in channels_cfg.items():
-            if isinstance(item, dict) and bool(item.get("enabled")):
-                enabled_channels.append(str(name))
-    channel_args = ",".join(enabled_channels) if enabled_channels else "local"
-    gateway_cmd = f"openheron gateway run --channels {channel_args}"
-
-    provider_cfg_dict = provider_cfg if isinstance(provider_cfg, dict) else {}
-    channels_cfg_dict = channels_cfg if isinstance(channels_cfg, dict) else {}
-    missing = install_rules.install_summary_missing(
-        selected_provider=selected_provider,
-        provider_cfg=provider_cfg_dict,
-        channels_cfg=channels_cfg_dict,
-        provider_requirements=install_rules.INSTALL_PROVIDER_SUMMARY_REQUIREMENTS,
-        channel_requirements=INSTALL_CHANNEL_SUMMARY_REQUIREMENTS,
-    )
-
-    lines = [f"Install summary: provider={selected_provider}, channels={enabled_channels or ['(none)']}"]
-    if missing:
-        lines.append(f"Install summary: missing={missing}")
-        fix_hints = install_rules.install_summary_fix_hints(
-            missing=missing,
-            selected_provider=selected_provider,
-            config_path=config_path,
-            provider_requirements=install_rules.INSTALL_PROVIDER_SUMMARY_REQUIREMENTS,
-            channel_requirements=INSTALL_CHANNEL_SUMMARY_REQUIREMENTS,
-        )
-        lines.append(f"Install summary: fixes={fix_hints}")
-        lines.append("Install summary: next[1]=openheron doctor")
-        lines.append(f"Install summary: next[2]={gateway_cmd}")
-    else:
-        lines.append("Install summary: no required fields missing for selected provider/channels.")
-        lines.append("Install summary: next[1]=openheron doctor")
-        lines.append(f"Install summary: next[2]={gateway_cmd}")
-    return lines
-
-
-def _install_gateway_channels(config_path: Path, preferred_channels: str | None) -> str:
-    """Resolve gateway channels used by install follow-up and daemon install."""
-
-    if preferred_channels and preferred_channels.strip():
-        return ",".join(parse_enabled_channels(preferred_channels))
-
-    config = load_config(config_path=config_path)
-    channels_cfg = config.get("channels", {})
-    enabled_channels: list[str] = []
-    if isinstance(channels_cfg, dict):
-        for name, item in channels_cfg.items():
-            if isinstance(item, dict) and bool(item.get("enabled")):
-                enabled_channels.append(str(name))
-    return ",".join(enabled_channels) if enabled_channels else "local"
 
 
 def _install_prereq_lines() -> list[str]:
@@ -3137,7 +2487,6 @@ def _render_install_welcome_with_rich(
     mode: str,
     config_path: Path,
     runtime_config_path: Path,
-    install_daemon: bool,
 ) -> bool:
     """Render install welcome card when Rich + TTY are available."""
     if not sys.stdout.isatty():
@@ -3156,7 +2505,6 @@ def _render_install_welcome_with_rich(
     table.add_row("Mode", mode)
     table.add_row("Config", str(config_path))
     table.add_row("Runtime", str(runtime_config_path))
-    table.add_row("Daemon", "enabled" if install_daemon else "disabled")
     console.print(Panel(table, title="[bold]OpenHeron Install Wizard[/bold]", border_style="cyan"))
     return True
 
@@ -3205,38 +2553,18 @@ def _render_install_action_plan_with_rich(*, commands: list[str], title: str = "
 def _cmd_install(
     *,
     force: bool,
-    non_interactive: bool,
-    accept_risk: bool = False,
-    install_daemon: bool = False,
-    daemon_channels: str | None = None,
-    init_only: bool = False,
 ) -> int:
-    """Run a minimal installation flow for first-time local setup."""
+    """Run minimal install flow: init setup and doctor checks."""
     config_path = get_config_path()
     runtime_config_path = config_path.with_name("runtime.json")
-    mode = "init-only" if init_only else ("non-interactive" if non_interactive else "interactive")
+    mode = "minimal"
     _render_install_welcome_with_rich(
         mode=mode,
         config_path=config_path,
         runtime_config_path=runtime_config_path,
-        install_daemon=install_daemon,
     )
 
-    if init_only:
-        if non_interactive or accept_risk or install_daemon or daemon_channels:
-            _stdout_line(
-                "Install init-only mode cannot be combined with non-interactive/risk/daemon options."
-            )
-            return 1
-        _install_step_line(1, 1, "initializing config and workspace...")
-        return _cmd_install_init_setup(force=force)
-
-    if non_interactive and not accept_risk:
-        _stdout_line("Non-interactive install requires explicit risk acknowledgement.")
-        _stdout_line("Re-run with: openheron install --non-interactive --accept-risk")
-        return 1
-
-    total_steps = 3 if install_daemon else 2
+    total_steps = 2
     _install_step_line(1, total_steps, "initializing config and workspace...")
     global _INSTALL_EMBEDDED_INIT_SETUP
     _INSTALL_EMBEDDED_INIT_SETUP = True
@@ -3253,26 +2581,6 @@ def _cmd_install(
         step=1, total=total_steps, outcome="done", message="setup initialization complete"
     )
 
-    if not non_interactive:
-        if sys.stdin.isatty():
-            _run_install_interactive_setup(
-                config_path=config_path,
-                input_fn=_interactive_install_input,
-                select_fn=_interactive_install_select,
-                secret_input_fn=_interactive_install_secret,
-                multi_select_fn=_interactive_install_multi_select,
-                review_missing=True,
-            )
-        else:
-            _stdout_line("Install setup skipped: non-interactive terminal.")
-    summary_lines = _install_summary_lines(config_path)
-    prereq_lines = _install_prereq_lines()
-    if not _render_install_sections_with_rich(summary_lines=summary_lines, prereq_lines=prereq_lines):
-        for line in summary_lines:
-            _stdout_line(line)
-        for line in prereq_lines:
-            _stdout_line(line)
-
     bootstrap_env_from_config()
     _install_step_line(2, total_steps, "running environment checks...")
     doctor_code = _cmd_doctor(output_json=False, verbose=False)
@@ -3282,7 +2590,7 @@ def _cmd_install(
         )
         _stdout_line("Install completed with issues. Fix the items above, then rerun `openheron doctor`.")
         _render_install_action_plan_with_rich(
-            commands=["openheron doctor", "openheron install --non-interactive --accept-risk"],
+            commands=["openheron doctor"],
             title="Retry Plan",
         )
         return 1
@@ -3290,30 +2598,7 @@ def _cmd_install(
         step=2, total=total_steps, outcome="done", message="environment checks passed"
     )
 
-    if install_daemon:
-        channels_value = _install_gateway_channels(config_path, daemon_channels)
-        _install_step_line(3, total_steps, "installing gateway daemon...")
-        daemon_code = _cmd_gateway_service_install(force=force, channels=channels_value, enable=True)
-        if daemon_code != 0:
-            _render_install_step_outcome_with_rich(
-                step=3, total=total_steps, outcome="warn", message="daemon setup failed (main install completed)"
-            )
-            _stdout_line("Install daemon setup failed. Main install is complete; please run daemon install manually.")
-            _stdout_line(
-                f"Install daemon retry: openheron gateway-service install --enable --channels {channels_value}"
-            )
-            _render_install_action_plan_with_rich(
-                commands=[f"openheron gateway-service install --enable --channels {channels_value}"],
-                title="Daemon Retry",
-            )
-        else:
-            _render_install_step_outcome_with_rich(
-                step=3, total=total_steps, outcome="done", message="daemon setup complete"
-            )
-            _stdout_line("Install daemon setup complete.")
-
-    if not non_interactive:
-        _stdout_line("Install complete. Next: run `openheron gateway run`.")
+    _stdout_line("Install complete. Next: run `openheron gateway`.")
     _render_install_action_plan_with_rich(
         commands=["openheron doctor", "openheron gateway"],
     )
@@ -4451,41 +3736,15 @@ def main(argv: list[str] | None = None) -> None:
     subparsers = parser.add_subparsers(dest="command", required=False)
     install_parser = subparsers.add_parser(
         "install",
-        help="Run guided installation and setup checks. See `openheron install --help` for full options.",
+        help="Run minimal install (init setup + doctor checks).",
         description=(
-            "Guided installer: initialize config/workspace, optional interactive setup, "
-            "doctor checks, and next-step hints."
+            "Minimal installer: initialize config/workspace and run doctor checks."
         ),
-    )
-    install_parser.add_argument(
-        "--init-only",
-        action="store_true",
-        help="Initialize config/workspace only.",
     )
     install_parser.add_argument(
         "--force",
         action="store_true",
         help="Reset config to defaults before running checks.",
-    )
-    install_parser.add_argument(
-        "--non-interactive",
-        action="store_true",
-        help="Skip interactive setup prompts (still prints install summary and next-step commands).",
-    )
-    install_parser.add_argument(
-        "--accept-risk",
-        action="store_true",
-        help="Acknowledge non-interactive install risks (required with --non-interactive).",
-    )
-    install_parser.add_argument(
-        "--install-daemon",
-        action="store_true",
-        help="Install and enable user-level gateway daemon (launchd/systemd user).",
-    )
-    install_parser.add_argument(
-        "--daemon-channels",
-        default=None,
-        help="Comma-separated channels for daemon mode (default: enabled channels in config).",
     )
     init_parser = subparsers.add_parser(
         "init",
@@ -4841,14 +4100,7 @@ def main(argv: list[str] | None = None) -> None:
             return 2
 
         handlers: dict[str, Callable[[], int]] = {
-            "install": lambda: _cmd_install(
-                force=args.force,
-                non_interactive=args.non_interactive,
-                accept_risk=args.accept_risk,
-                install_daemon=args.install_daemon,
-                daemon_channels=args.daemon_channels,
-                init_only=args.init_only,
-            ),
+            "install": lambda: _cmd_install(force=args.force),
             "init": lambda: _cmd_init(force=args.force),
             "skills": lambda: _cmd_skills(agent=getattr(args, "agent", None)),
             "mcps": lambda: _cmd_mcps(agent=getattr(args, "agent", None)),
