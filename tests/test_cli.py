@@ -2199,7 +2199,7 @@ class CLITests(unittest.TestCase):
                 with self.assertRaises(SystemExit) as ctx:
                     cli.main(["cron", "list"])
                 self.assertEqual(ctx.exception.code, 0)
-                mocked_list.assert_called_once_with(include_disabled=False, agent=None)
+                mocked_list.assert_called_once_with(include_disabled=False, history=False, history_limit=20, agent=None)
                 mocked_bootstrap.assert_called_once()
 
     def test_heartbeat_status_mode_dispatch(self) -> None:
@@ -2465,9 +2465,12 @@ class CLITests(unittest.TestCase):
         from openpipixia import cli
 
         fake_schedule = pytypes.SimpleNamespace(kind="every", every_seconds=30)
-        fake_state = pytypes.SimpleNamespace(next_run_at_ms=None)
+        fake_state = pytypes.SimpleNamespace(next_run_at_ms=None, last_run_at_ms=None)
         fake_job = pytypes.SimpleNamespace(id="j1", name="demo", enabled=True, schedule=fake_schedule, state=fake_state)
-        fake_service = pytypes.SimpleNamespace(list_jobs=lambda include_disabled: [fake_job])
+        fake_service = pytypes.SimpleNamespace(
+            list_jobs=lambda include_disabled: [fake_job],
+            list_history=lambda limit: [],
+        )
 
         with patch.object(cli, "_resolve_target_agent_names", return_value=([], None)):
             with patch.object(cli, "_cron_service", return_value=fake_service):
@@ -2477,15 +2480,18 @@ class CLITests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(mocked_print.call_count, 2)
         mocked_print.assert_any_call("Scheduled jobs:")
-        mocked_print.assert_any_call("- demo (id: j1, every:30s, enabled, next=-)")
+        mocked_print.assert_any_call("- demo (id: j1, every:30s, status=pending, next=-, last=-)")
 
     def test_cmd_cron_list_multi_agent_uses_direct_store_read_without_subprocess(self) -> None:
         from openpipixia import cli
 
         fake_schedule = pytypes.SimpleNamespace(kind="every", every_seconds=30)
-        fake_state = pytypes.SimpleNamespace(next_run_at_ms=None)
+        fake_state = pytypes.SimpleNamespace(next_run_at_ms=None, last_run_at_ms=None)
         fake_job = pytypes.SimpleNamespace(id="j1", name="demo", enabled=True, schedule=fake_schedule, state=fake_state)
-        fake_service = pytypes.SimpleNamespace(list_jobs=lambda include_disabled: [fake_job])
+        fake_service = pytypes.SimpleNamespace(
+            list_jobs=lambda include_disabled: [fake_job],
+            list_history=lambda limit: [],
+        )
 
         with patch.object(cli, "_resolve_target_agent_names", return_value=(["agent_a", "agent_b"], None)):
             with patch.object(cli, "_cron_service_for_agent", return_value=(fake_service, None)):
@@ -2498,6 +2504,33 @@ class CLITests(unittest.TestCase):
         lines = [call.args[0] for call in mocked_print.call_args_list if call.args]
         self.assertTrue(any("[agent=agent_a]" in line for line in lines))
         self.assertTrue(any("[agent=agent_b]" in line for line in lines))
+
+    def test_cmd_cron_list_history_uses_plain_stdout(self) -> None:
+        from openpipixia import cli
+
+        fake_schedule = pytypes.SimpleNamespace(kind="at", at_ms=1_000)
+        fake_entry = pytypes.SimpleNamespace(
+            job_id="j1",
+            name="demo",
+            schedule=fake_schedule,
+            status="done",
+            event_at_ms=2_000,
+            error=None,
+        )
+        fake_service = pytypes.SimpleNamespace(
+            list_jobs=lambda include_disabled: [],
+            list_history=lambda limit: [fake_entry],
+        )
+
+        with patch.object(cli, "_resolve_target_agent_names", return_value=([], None)):
+            with patch.object(cli, "_cron_service", return_value=fake_service):
+                with patch("builtins.print") as mocked_print:
+                    code = cli._cmd_cron_list(include_disabled=True, history=True, history_limit=5)
+
+        self.assertEqual(code, 0)
+        self.assertEqual(mocked_print.call_count, 2)
+        mocked_print.assert_any_call("Recent cron history:")
+        mocked_print.assert_any_call("- demo (id: j1, at:1970-01-01T08:00:01, status=done, event=1970-01-01T08:00:02)")
 
     def test_cmd_heartbeat_status_prints_runtime_fields(self) -> None:
         from openpipixia import cli

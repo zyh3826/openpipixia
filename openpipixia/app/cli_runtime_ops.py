@@ -84,9 +84,54 @@ def _format_ts(ms: int | None) -> str:
     return format_timestamp_ms(ms)
 
 
+def _cron_job_status(job: Any, *, now_ms: int) -> str:
+    """Return a stable status label for one current cron job."""
+    if not bool(getattr(job, "enabled", False)):
+        return "paused"
+    state = getattr(job, "state", None)
+    next_run_at_ms = getattr(state, "next_run_at_ms", None)
+    if isinstance(next_run_at_ms, int) and next_run_at_ms <= now_ms:
+        return "due"
+    last_run_at_ms = getattr(state, "last_run_at_ms", None)
+    if isinstance(last_run_at_ms, int):
+        return "scheduled"
+    return "pending"
+
+
+def _render_cron_jobs(jobs: list[Any], *, now_ms: int) -> list[str]:
+    """Render active cron jobs for CLI text output."""
+    if not jobs:
+        return ["No scheduled jobs."]
+    lines = ["Scheduled jobs:"]
+    for job in jobs:
+        state = getattr(job, "state", None)
+        lines.append(
+            f"- {job.name} (id: {job.id}, {_format_schedule(job)}, status={_cron_job_status(job, now_ms=now_ms)}, next={_format_ts(getattr(state, 'next_run_at_ms', None))}, last={_format_ts(getattr(state, 'last_run_at_ms', None))})"
+        )
+    return lines
+
+
+def _render_cron_history(entries: list[Any]) -> list[str]:
+    """Render persisted cron history entries for CLI text output."""
+    if not entries:
+        return ["No cron history."]
+    lines = ["Recent cron history:"]
+    for entry in entries:
+        suffix = ""
+        error = getattr(entry, "error", None)
+        if error:
+            suffix = f", error={error}"
+        lines.append(
+            f"- {entry.name} (id: {entry.job_id}, {_format_schedule(entry)}, status={entry.status}, event={_format_ts(getattr(entry, 'event_at_ms', None))}{suffix})"
+        )
+    return lines
+
+
 def cmd_cron_list(
     *,
     include_disabled: bool,
+    history: bool,
+    history_limit: int,
     agent: str | None,
     stdout_line: Callable[[str], None],
     resolve_target_agent_names: Callable[[str | None], tuple[list[str], str | None]],
@@ -106,31 +151,28 @@ def cmd_cron_list(
                 results.append((agent_name, 1, "", service_error))
                 continue
             assert service is not None
-            jobs = service.list_jobs(include_disabled=include_disabled)
-            lines: list[str] = []
-            if not jobs:
-                lines.append("No scheduled jobs.")
-            else:
-                lines.append("Scheduled jobs:")
-                for job in jobs:
-                    status = "enabled" if job.enabled else "disabled"
-                    lines.append(
-                        f"- {job.name} (id: {job.id}, {_format_schedule(job)}, {status}, next={_format_ts(job.state.next_run_at_ms)})"
-                    )
+            lines = (
+                _render_cron_history(service.list_history(limit=history_limit))
+                if history
+                else _render_cron_jobs(
+                    service.list_jobs(include_disabled=include_disabled),
+                    now_ms=int(time.time() * 1000),
+                )
+            )
             results.append((agent_name, 0, "\n".join(lines), ""))
         return print_agent_output_sections(results)
 
     service = cron_service_local()
-    jobs = service.list_jobs(include_disabled=include_disabled)
-    if not jobs:
-        stdout_line("No scheduled jobs.")
-        return 0
-    stdout_line("Scheduled jobs:")
-    for job in jobs:
-        status = "enabled" if job.enabled else "disabled"
-        stdout_line(
-            f"- {job.name} (id: {job.id}, {_format_schedule(job)}, {status}, next={_format_ts(job.state.next_run_at_ms)})"
+    lines = (
+        _render_cron_history(service.list_history(limit=history_limit))
+        if history
+        else _render_cron_jobs(
+            service.list_jobs(include_disabled=include_disabled),
+            now_ms=int(time.time() * 1000),
         )
+    )
+    for line in lines:
+        stdout_line(line)
     return 0
 
 
@@ -298,7 +340,7 @@ def dispatch_cron_command(
     stdout_line: Callable[[str], None],
     global_enabled_agent_names: Callable[[], list[str]],
     run_agent_cli_command: Callable[[str, list[str]], tuple[int, str, str]],
-    cmd_cron_list_fn: Callable[[bool, str | None], int],
+    cmd_cron_list_fn: Callable[[bool, bool, int, str | None], int],
     cmd_cron_add_fn: Callable[[str, str, int | None, str | None, str | None, str | None, bool, str | None, str | None], int],
     cmd_cron_remove_fn: Callable[[str], int],
     cmd_cron_enable_fn: Callable[[str, bool], int],
@@ -348,7 +390,7 @@ def dispatch_cron_command(
         return 0 if code == 0 else 1
 
     handlers: dict[str, Callable[[], int]] = {
-        "list": lambda: cmd_cron_list_fn(args.all, selected_agent),
+        "list": lambda: cmd_cron_list_fn(args.all, args.history, args.limit, selected_agent),
         "add": lambda: cmd_cron_add_fn(
             args.name,
             args.message,

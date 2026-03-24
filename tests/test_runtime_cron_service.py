@@ -107,8 +107,9 @@ class CronServiceTests(unittest.TestCase):
             )
             self.assertEqual(job.name, "recover")
             payload = json.loads(store_path.read_text(encoding="utf-8"))
-            self.assertEqual(payload.get("version"), 2)
+            self.assertEqual(payload.get("version"), 3)
             self.assertEqual(len(payload.get("jobs", [])), 1)
+            self.assertEqual(payload.get("history", []), [])
 
 
 class CronServiceAsyncTests(unittest.IsolatedAsyncioTestCase):
@@ -196,6 +197,10 @@ class CronServiceAsyncTests(unittest.IsolatedAsyncioTestCase):
             executed = await service.tick_once()
             self.assertEqual(executed, 1)
             self.assertEqual(service.list_jobs(include_disabled=True), [])
+            history = service.list_history(limit=10)
+            self.assertEqual(len(history), 1)
+            self.assertEqual(history[0].job_id, job.id)
+            self.assertEqual(history[0].status, "skipped")
 
     async def test_start_and_stop_toggle_running_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -264,6 +269,41 @@ class CronServiceAsyncTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(seen, [job.id])
             finally:
                 running.stop()
+
+    async def test_history_records_successful_execution(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            clock = _FakeClock(start_ms=4_000_000)
+
+            async def on_job(job) -> str:
+                return "ok"
+
+            service = CronService(Path(tmp) / "cron_jobs.json", on_job=on_job, now_ms_fn=clock.now)
+            job = service.add_job(
+                name="demo",
+                schedule=CronSchedule(kind="every", every_seconds=1),
+                message="hello",
+            )
+            clock.advance(1_001)
+            executed = await service.tick_once()
+            self.assertEqual(executed, 1)
+            history = service.list_history(limit=10)
+            self.assertEqual(len(history), 1)
+            self.assertEqual(history[0].job_id, job.id)
+            self.assertEqual(history[0].status, "done")
+
+    async def test_remove_job_appends_removed_history_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            service = CronService(Path(tmp) / "cron_jobs.json")
+            job = service.add_job(
+                name="remove-me",
+                schedule=CronSchedule(kind="every", every_seconds=60),
+                message="hello",
+            )
+            self.assertTrue(service.remove_job(job.id))
+            history = service.list_history(limit=10)
+            self.assertEqual(len(history), 1)
+            self.assertEqual(history[0].job_id, job.id)
+            self.assertEqual(history[0].status, "removed")
 
 
 if __name__ == "__main__":

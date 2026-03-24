@@ -585,8 +585,9 @@ class ToolsTests(unittest.TestCase):
             store_path = Path(tmp) / ".openpipixia" / "cron_jobs.json"
             self.assertTrue(store_path.exists())
             payload = json.loads(store_path.read_text(encoding="utf-8"))
-            self.assertEqual(payload.get("version"), 2)
+            self.assertEqual(payload.get("version"), 3)
             self.assertTrue(payload.get("jobs"))
+            self.assertEqual(payload.get("history"), [])
             first = payload["jobs"][0]
             self.assertTrue(first["payload"]["deliver"])
             self.assertEqual(first["payload"]["channel"], "telegram")

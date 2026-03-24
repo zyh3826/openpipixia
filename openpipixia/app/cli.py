@@ -3298,9 +3298,17 @@ def _format_ts(ms: int | None) -> str:
     return format_timestamp_ms(ms)
 
 
-def _cmd_cron_list(*, include_disabled: bool, agent: str | None = None) -> int:
+def _cmd_cron_list(
+    *,
+    include_disabled: bool,
+    history: bool = False,
+    history_limit: int = 20,
+    agent: str | None = None,
+) -> int:
     return cli_runtime_ops.cmd_cron_list(
         include_disabled=include_disabled,
+        history=history,
+        history_limit=history_limit,
         agent=agent,
         stdout_line=_stdout_line,
         resolve_target_agent_names=lambda value: _resolve_target_agent_names(agent=value),
@@ -3385,8 +3393,10 @@ def _dispatch_cron_command(args: argparse.Namespace, parser: argparse.ArgumentPa
         stdout_line=_stdout_line,
         global_enabled_agent_names=_global_enabled_agent_names,
         run_agent_cli_command=lambda name, argv: _run_agent_cli_command(agent_name=name, args=argv),
-        cmd_cron_list_fn=lambda include_disabled, selected_agent: _cmd_cron_list(
+        cmd_cron_list_fn=lambda include_disabled, history, history_limit, selected_agent: _cmd_cron_list(
             include_disabled=include_disabled,
+            history=history,
+            history_limit=history_limit,
             agent=selected_agent,
         ),
         cmd_cron_add_fn=lambda name, message, every, cron_expr, tz, at, deliver, to, channel: _cmd_cron_add(
@@ -3789,6 +3799,8 @@ def main(argv: list[str] | None = None) -> None:
 
     cron_list_parser = cron_subparsers.add_parser("list", help="List scheduled cron jobs.")
     cron_list_parser.add_argument("--all", action="store_true", help="Include disabled jobs.")
+    cron_list_parser.add_argument("--history", action="store_true", help="Show recent cron history instead of active jobs.")
+    cron_list_parser.add_argument("--limit", type=int, default=20, help="Number of history entries to show with --history.")
 
     cron_add_parser = cron_subparsers.add_parser("add", help="Add a cron job.")
     cron_add_parser.add_argument("--name", required=True, help="Job name.")

@@ -172,11 +172,26 @@ class CronJob:
 
 
 @dataclass(slots=True)
+class CronHistoryEntry:
+    """Persisted record for one cron execution or removal event."""
+
+    job_id: str
+    name: str
+    schedule: CronSchedule
+    status: Literal["done", "failed", "skipped", "removed"]
+    created_at_ms: int
+    event_at_ms: int
+    updated_at_ms: int
+    error: str | None = None
+
+
+@dataclass(slots=True)
 class CronStore:
     """On-disk store model."""
 
-    version: int = 2
+    version: int = 3
     jobs: list[CronJob] = field(default_factory=list)
+    history: list[CronHistoryEntry] = field(default_factory=list)
 
 
 @dataclass(slots=True, frozen=True)
@@ -225,6 +240,7 @@ class CronService:
         self._last_store_error: str | None = None
         self._running = False
         self._timer_task: asyncio.Task[None] | None = None
+        self._max_history_entries = 100
 
     def _now(self) -> int:
         return self._now_ms_fn()
@@ -385,6 +401,77 @@ class CronService:
             "delete_after_run": job.delete_after_run,
         }
 
+    def _deserialize_history_entry(self, raw: dict, now_ms: int) -> CronHistoryEntry | None:
+        try:
+            schedule_raw = raw.get("schedule") or {}
+            schedule = CronSchedule(
+                kind=str(schedule_raw.get("kind", "every")),
+                every_seconds=schedule_raw.get("every_seconds"),
+                cron_expr=schedule_raw.get("cron_expr"),
+                at_ms=schedule_raw.get("at_ms"),
+                tz=schedule_raw.get("tz"),
+            )
+            created_at_ms = int(raw.get("created_at_ms", now_ms))
+            event_at_ms = int(raw.get("event_at_ms", created_at_ms))
+            updated_at_ms = int(raw.get("updated_at_ms", event_at_ms))
+            status = str(raw.get("status", "")).strip().lower()
+            if status not in {"done", "failed", "skipped", "removed"}:
+                return None
+            return CronHistoryEntry(
+                job_id=str(raw.get("job_id", "")),
+                name=str(raw.get("name", "")),
+                schedule=schedule,
+                status=status,
+                created_at_ms=created_at_ms,
+                event_at_ms=event_at_ms,
+                updated_at_ms=updated_at_ms,
+                error=str(raw.get("error", "")).strip() or None,
+            )
+        except Exception:
+            return None
+
+    def _serialize_history_entry(self, entry: CronHistoryEntry) -> dict:
+        return {
+            "job_id": entry.job_id,
+            "name": entry.name,
+            "schedule": {
+                "kind": entry.schedule.kind,
+                "every_seconds": entry.schedule.every_seconds,
+                "cron_expr": entry.schedule.cron_expr,
+                "at_ms": entry.schedule.at_ms,
+                "tz": entry.schedule.tz,
+            },
+            "status": entry.status,
+            "created_at_ms": entry.created_at_ms,
+            "event_at_ms": entry.event_at_ms,
+            "updated_at_ms": entry.updated_at_ms,
+            "error": entry.error,
+        }
+
+    def _append_history_entry(
+        self,
+        store: CronStore,
+        *,
+        job: CronJob,
+        status: Literal["done", "failed", "skipped", "removed"],
+        event_at_ms: int,
+        error: str | None = None,
+    ) -> None:
+        store.history.append(
+            CronHistoryEntry(
+                job_id=job.id,
+                name=job.name,
+                schedule=job.schedule,
+                status=status,
+                created_at_ms=job.created_at_ms,
+                event_at_ms=event_at_ms,
+                updated_at_ms=self._now(),
+                error=error,
+            )
+        )
+        if len(store.history) > self._max_history_entries:
+            store.history = store.history[-self._max_history_entries :]
+
     def _load_store(self) -> CronStore:
         current_mtime = self._read_store_mtime_ns()
         if self._store is not None:
@@ -412,12 +499,16 @@ class CronService:
             return self._store
 
         jobs: list[CronJob] = []
+        history: list[CronHistoryEntry] = []
         if isinstance(raw, dict):
             raw_jobs = raw.get("jobs", [])
+            raw_history = raw.get("history", [])
         elif isinstance(raw, list):
             raw_jobs = raw
+            raw_history = []
         else:
             raw_jobs = []
+            raw_history = []
 
         for item in raw_jobs:
             if not isinstance(item, dict):
@@ -426,7 +517,14 @@ class CronService:
             if parsed is not None:
                 jobs.append(parsed)
 
-        self._store = CronStore(version=2, jobs=jobs)
+        for item in raw_history:
+            if not isinstance(item, dict):
+                continue
+            parsed = self._deserialize_history_entry(item, now_ms)
+            if parsed is not None:
+                history.append(parsed)
+
+        self._store = CronStore(version=3, jobs=jobs, history=history)
         self._store_mtime_ns = current_mtime
         return self._store
 
@@ -437,6 +535,7 @@ class CronService:
         payload = {
             "version": self._store.version,
             "jobs": [self._serialize_job(job) for job in self._store.jobs],
+            "history": [self._serialize_history_entry(entry) for entry in self._store.history],
         }
         temp_name = f".{self.store_path.name}.tmp.{os.getpid()}.{uuid.uuid4().hex}"
         temp_path = self.store_path.with_name(temp_name)
@@ -527,10 +626,17 @@ class CronService:
 
         job.state.last_run_at_ms = started_at
         job.updated_at_ms = self._now()
+        store = self._load_store()
+        if result.reason == "ok":
+            history_status: Literal["done", "failed", "skipped"] = "done"
+        elif result.reason == "error":
+            history_status = "failed"
+        else:
+            history_status = "skipped"
+        self._append_history_entry(store, job=job, status=history_status, event_at_ms=started_at, error=result.error)
 
         if job.schedule.kind == "at":
             if job.delete_after_run:
-                store = self._load_store()
                 store.jobs = [item for item in store.jobs if item.id != job.id]
             else:
                 job.enabled = False
@@ -561,6 +667,14 @@ class CronService:
         store = self._load_store()
         jobs = store.jobs if include_disabled else [job for job in store.jobs if job.enabled]
         return sorted(jobs, key=lambda item: item.state.next_run_at_ms if item.state.next_run_at_ms is not None else 10**18)
+
+    def list_history(self, *, limit: int | None = 20) -> list[CronHistoryEntry]:
+        """Return recent cron history entries ordered from newest to oldest."""
+        store = self._load_store()
+        entries = sorted(store.history, key=lambda item: item.event_at_ms, reverse=True)
+        if limit is None or limit <= 0:
+            return entries
+        return entries[:limit]
 
     def add_job(
         self,
@@ -593,10 +707,23 @@ class CronService:
 
     def remove_job(self, job_id: str) -> bool:
         store = self._load_store()
-        before = len(store.jobs)
-        store.jobs = [job for job in store.jobs if job.id != job_id]
-        removed = len(store.jobs) < before
+        removed_job: CronJob | None = None
+        kept_jobs: list[CronJob] = []
+        for job in store.jobs:
+            if job.id == job_id and removed_job is None:
+                removed_job = job
+                continue
+            kept_jobs.append(job)
+        store.jobs = kept_jobs
+        removed = removed_job is not None
         if removed:
+            assert removed_job is not None
+            self._append_history_entry(
+                store,
+                job=removed_job,
+                status="removed",
+                event_at_ms=self._now(),
+            )
             self._save_store()
             self._arm_timer()
         return removed
