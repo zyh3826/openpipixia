@@ -12,3 +12,5 @@ oauth-cli-kit>=0.1.1
 pytest
 questionary
 pyautogui
+pyobjc-core
+pyobjc
