@@ -129,6 +129,14 @@ class CLITests(unittest.TestCase):
                 self.assertTrue(runtime_path.exists())
                 cfg = json.loads(config_path.read_text(encoding="utf-8"))
                 self.assertEqual(cfg["agent"]["workspace"], str(data_dir / agent_name / "workspace"))
+                self.assertIn("openai_mm", cfg["multimodalProviders"])
+                self.assertIn("google_mm", cfg["multimodalProviders"])
+                self.assertIn("qwen_mm", cfg["multimodalProviders"])
+                self.assertFalse(cfg["multimodalProviders"]["openai_mm"]["enabled"])
+                self.assertFalse(cfg["multimodalProviders"]["google_mm"]["enabled"])
+                self.assertFalse(cfg["multimodalProviders"]["qwen_mm"]["enabled"])
+                self.assertEqual(cfg["gui"]["groundingProvider"], "openai_mm")
+                self.assertEqual(cfg["gui"]["plannerProvider"], "openai_mm")
                 workspace = data_dir / agent_name / "workspace"
                 for bootstrap_name in cli._INIT_BOOTSTRAP_TEMPLATES:
                     self.assertTrue((workspace / bootstrap_name).exists())

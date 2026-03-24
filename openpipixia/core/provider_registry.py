@@ -46,7 +46,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ),
     ProviderSpec(
         name="openai",
-        default_model="openai/gpt-4.1-mini",
+        default_model="openai/gpt-5.4",
         display_name="OpenAI",
         runtime=RUNTIME_LITELLM,
         api_key_env="OPENAI_API_KEY",
@@ -55,7 +55,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ),
     ProviderSpec(
         name="openrouter",
-        default_model="openai/gpt-4.1-mini",
+        default_model="openai/gpt-5.4",
         display_name="OpenRouter",
         runtime=RUNTIME_LITELLM,
         api_key_env="OPENROUTER_API_KEY",
@@ -137,7 +137,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ),
     ProviderSpec(
         name="aihubmix",
-        default_model="openai/gpt-4.1-mini",
+        default_model="openai/gpt-5.4",
         display_name="AiHubMix",
         runtime=RUNTIME_LITELLM,
         api_key_env="OPENAI_API_KEY",
@@ -167,7 +167,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
     ),
     ProviderSpec(
         name="custom",
-        default_model="openai/gpt-4.1-mini",
+        default_model="openai/gpt-5.4",
         display_name="Custom OpenAI-Compatible",
         runtime=RUNTIME_LITELLM,
         api_key_env="OPENAI_API_KEY",

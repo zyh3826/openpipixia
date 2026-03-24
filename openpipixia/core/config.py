@@ -117,7 +117,7 @@ _CHANNEL_DEFAULT_VALUE_FIELDS: tuple[tuple[str, str, str, Any], ...] = (
     ("weixin", "pollTimeoutSeconds", "WEIXIN_POLL_TIMEOUT_SECONDS", 35),
 )
 
-_EXTENSIBLE_MAP_KEYS: frozenset[str] = frozenset({"env"})
+_EXTENSIBLE_MAP_KEYS: frozenset[str] = frozenset({"env", "multimodalProviders"})
 _CONFIG_PATH_ENV = "OPENPIPIXIA_CONFIG_FILE"
 _RUNTIME_CONFIG_PATH_ENV = "OPENPIPIXIA_RUNTIME_CONFIG_FILE"
 _DATA_DIR_ENV = "OPENPIPIXIA_DATA_DIR"
@@ -252,10 +252,35 @@ def default_config() -> dict[str, Any]:
             }
             for name in provider_names()
         },
-        "multimodalProviders": {},
+        "multimodalProviders": {
+            "openai_mm": {
+                "enabled": False,
+                "provider": "openai",
+                "apiKey": "",
+                "model": "gpt-5.4",
+                "apiBase": "",
+                "extraHeaders": {},
+            },
+            "google_mm": {
+                "enabled": False,
+                "provider": "google",
+                "apiKey": "",
+                "model": "gemini-3-flash-preview",
+                "apiBase": "",
+                "extraHeaders": {},
+            },
+            "qwen_mm": {
+                "enabled": False,
+                "provider": "qwen",
+                "apiKey": "",
+                "model": "",
+                "apiBase": "",
+                "extraHeaders": {},
+            },
+        },
         "gui": {
-            "groundingProvider": "",
-            "plannerProvider": "",
+            "groundingProvider": "openai_mm",
+            "plannerProvider": "openai_mm",
             "builtinGUIToolsEnabled": True,
         },
         "session": {
