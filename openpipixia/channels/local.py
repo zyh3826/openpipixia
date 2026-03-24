@@ -16,10 +16,17 @@ class LocalChannel(BaseChannel):
 
     name = "local"
 
-    def __init__(self, bus: MessageBus, writer: Callable[[str], None] | None = None):
+    def __init__(
+        self,
+        bus: MessageBus,
+        writer: Callable[[str], None] | None = None,
+        *,
+        streaming_enabled: bool = True,
+    ):
         super().__init__(bus)
         self._writer = writer or print
         self._stream_buffers: dict[str, str] = {}
+        self._streaming_enabled = bool(streaming_enabled)
 
     async def start(self) -> None:
         self._running = True
@@ -67,7 +74,7 @@ class LocalChannel(BaseChannel):
             sender_id=sender_id,
             chat_id=chat_id,
             content=text,
-            metadata={"_wants_stream": True},
+            metadata={"_wants_stream": self._streaming_enabled},
         )
 
 

@@ -12,6 +12,7 @@ from pathlib import Path
 from unittest.mock import AsyncMock, Mock, patch
 
 from google.adk.agents import LlmAgent
+from google.adk.agents.run_config import StreamingMode
 from google.adk.tools import LongRunningFunctionTool
 
 from openpipixia.bus.events import InboundMessage, OutboundMessage
@@ -110,9 +111,11 @@ class GatewayTests(unittest.TestCase):
         fake_event_2 = pytypes.SimpleNamespace(
             content=pytypes.SimpleNamespace(parts=[pytypes.SimpleNamespace(text="hello world")])
         )
+        captured: dict[str, object] = {}
 
         class _FakeRunner:
             async def run_async(self, **kwargs):
+                captured.update(kwargs)
                 yield fake_event_1
                 yield fake_event_2
 
@@ -143,6 +146,55 @@ class GatewayTests(unittest.TestCase):
         self.assertEqual(streamed[0].metadata.get("_stream_delta"), True)
         self.assertEqual(streamed[0].content, "hello")
         self.assertEqual(streamed[1].metadata.get("_stream_delta"), True)
+        self.assertEqual(streamed[1].content, " world")
+        self.assertEqual(streamed[2].metadata.get("_stream_end"), True)
+        run_config = captured.get("run_config")
+        self.assertIsNotNone(run_config)
+        self.assertEqual(run_config.streaming_mode, StreamingMode.SSE)
+
+    def test_process_message_skips_final_aggregate_after_delta_chunks(self) -> None:
+        fake_event_1 = pytypes.SimpleNamespace(
+            content=pytypes.SimpleNamespace(parts=[pytypes.SimpleNamespace(text="hello")])
+        )
+        fake_event_2 = pytypes.SimpleNamespace(
+            content=pytypes.SimpleNamespace(parts=[pytypes.SimpleNamespace(text=" world")])
+        )
+        fake_event_3 = pytypes.SimpleNamespace(
+            content=pytypes.SimpleNamespace(parts=[pytypes.SimpleNamespace(text="hello world")])
+        )
+
+        class _FakeRunner:
+            async def run_async(self, **kwargs):
+                yield fake_event_1
+                yield fake_event_2
+                yield fake_event_3
+
+        async def _run() -> tuple[OutboundMessage, list[OutboundMessage]]:
+            bus = MessageBus()
+            fake_agent = pytypes.SimpleNamespace(name="openpipixia")
+            with patch("openpipixia.app.gateway.create_runner", return_value=(_FakeRunner(), object())):
+                gateway = Gateway(agent=fake_agent, app_name="openpipixia", bus=bus)
+                inbound = InboundMessage(
+                    channel="local",
+                    sender_id="u1",
+                    chat_id="c1",
+                    content="hello",
+                    metadata={"_wants_stream": True},
+                )
+                outbound = await gateway.process_message(inbound)
+                streamed = [
+                    await asyncio.wait_for(bus.consume_outbound(), timeout=0.2),
+                    await asyncio.wait_for(bus.consume_outbound(), timeout=0.2),
+                    await asyncio.wait_for(bus.consume_outbound(), timeout=0.2),
+                ]
+                with self.assertRaises(asyncio.TimeoutError):
+                    await asyncio.wait_for(bus.consume_outbound(), timeout=0.05)
+                return outbound, streamed
+
+        outbound, streamed = asyncio.run(_run())
+
+        self.assertEqual(outbound.content, "hello world")
+        self.assertEqual(streamed[0].content, "hello")
         self.assertEqual(streamed[1].content, " world")
         self.assertEqual(streamed[2].metadata.get("_stream_end"), True)
 

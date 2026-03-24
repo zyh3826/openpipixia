@@ -9,6 +9,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Callable
 
+from google.adk.agents.run_config import RunConfig, StreamingMode
 from google.genai import types
 
 from ..bus.events import InboundMessage, OutboundMessage
@@ -392,8 +393,11 @@ class Gateway:
     ) -> str:
         """Run one ADK stream and merge emitted text parts into final output."""
         final = ""
+        effective_run_kwargs = dict(run_kwargs)
+        if emit_stream and "run_config" not in effective_run_kwargs:
+            effective_run_kwargs["run_config"] = RunConfig(streaming_mode=StreamingMode.SSE)
         with route_context(channel, chat_id):
-            async for event in runner.run_async(**run_kwargs):
+            async for event in runner.run_async(**effective_run_kwargs):
                 text = extract_text(getattr(event, "content", None))
                 merged = merge_text_stream(final, text)
                 if emit_stream and merged and merged != final:

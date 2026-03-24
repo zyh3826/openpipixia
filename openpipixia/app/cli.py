@@ -4046,6 +4046,7 @@ def _debug_event(event: object) -> None:
         return
     content = getattr(event, "content", None)
     author = getattr(event, "author", "")
+    partial = getattr(event, "partial", None)
     turn_complete = getattr(event, "turn_complete", None)
     finish_reason = getattr(event, "finish_reason", None)
     error_code = getattr(event, "error_code", None)
@@ -4058,6 +4059,7 @@ def _debug_event(event: object) -> None:
             text = getattr(part, "text", None)
             if text:
                 row["text"] = text
+                row["text_len"] = len(text)
             function_call = getattr(part, "function_call", None)
             if function_call:
                 row["function_call"] = {
@@ -4076,6 +4078,7 @@ def _debug_event(event: object) -> None:
         "llm.event",
         {
             "author": author,
+            "partial": partial,
             "turn_complete": turn_complete,
             "finish_reason": finish_reason,
             "error_code": error_code,

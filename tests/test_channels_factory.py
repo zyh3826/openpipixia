@@ -81,6 +81,19 @@ class ChannelFactoryTests(unittest.TestCase):
         manager, local_channel = build_channel_manager(bus=MessageBus(), channel_names=["local"])
         self.assertIsNotNone(local_channel)
         self.assertIn("local", manager.channels)
+        self.assertTrue(getattr(local_channel, "_streaming_enabled", False))
+
+    def test_build_manager_applies_channel_streaming_env_flags(self) -> None:
+        os.environ["LOCAL_STREAMING_ENABLED"] = "0"
+        os.environ["FEISHU_APP_ID"] = "app-id"
+        os.environ["FEISHU_APP_SECRET"] = "app-secret"
+        os.environ["FEISHU_STREAMING_ENABLED"] = "1"
+
+        manager, local_channel = build_channel_manager(bus=MessageBus(), channel_names=["local", "feishu"])
+
+        self.assertIsNotNone(local_channel)
+        self.assertFalse(getattr(local_channel, "_streaming_enabled", True))
+        self.assertTrue(getattr(manager.channels["feishu"], "_streaming_enabled", False))
 
     def test_build_manager_skips_unimplemented_channel(self) -> None:
         os.environ["TELEGRAM_BOT_TOKEN"] = "token-1"

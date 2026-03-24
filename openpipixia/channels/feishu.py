@@ -8,6 +8,7 @@ import logging
 import os
 import re
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -24,9 +25,13 @@ try:
         CreateImageRequestBody,
         CreateMessageRequest,
         CreateMessageRequestBody,
+        PatchMessageRequest,
+        PatchMessageRequestBody,
         GetFileRequest,
         GetMessageResourceRequest,
         P2ImMessageReceiveV1,
+        UpdateMessageRequest,
+        UpdateMessageRequestBody,
     )
 
     FEISHU_AVAILABLE = True
@@ -38,9 +43,13 @@ except ImportError:  # pragma: no cover - environment dependent
     CreateImageRequestBody = None
     CreateMessageRequest = None
     CreateMessageRequestBody = None
+    PatchMessageRequest = None
+    PatchMessageRequestBody = None
     GetFileRequest = None
     GetMessageResourceRequest = None
     P2ImMessageReceiveV1 = None
+    UpdateMessageRequest = None
+    UpdateMessageRequestBody = None
     FEISHU_AVAILABLE = False
 
 if FEISHU_AVAILABLE:
@@ -155,16 +164,28 @@ class FeishuChannel(BaseChannel):
         encrypt_key: str = "",
         verification_token: str = "",
         allow_from: list[str] | None = None,
+        streaming_enabled: bool = False,
     ) -> None:
         super().__init__(bus, allow_from=allow_from)
         self.app_id = app_id
         self.app_secret = app_secret
         self.encrypt_key = encrypt_key
         self.verification_token = verification_token
+        self._streaming_enabled = bool(streaming_enabled)
         self._loop: asyncio.AbstractEventLoop | None = None
         self._client: Any = None
         self._ws_client: Any = None
         self._ws_thread: threading.Thread | None = None
+        self._stream_states: dict[str, dict[str, Any]] = {}
+
+    @staticmethod
+    def _stream_update_interval_seconds() -> float:
+        raw = os.getenv("OPENPIPIXIA_FEISHU_STREAM_UPDATE_INTERVAL_MS", "200").strip()
+        try:
+            interval_ms = int(raw)
+        except ValueError:
+            interval_ms = 200
+        return max(0.0, interval_ms / 1000.0)
 
     async def start(self) -> None:
         if not FEISHU_AVAILABLE:
@@ -248,6 +269,47 @@ class FeishuChannel(BaseChannel):
             .build()
         )
         return self._send_message_request_sync(request, request_type="text")
+
+    def _patch_text_sync(self, message_id: str, text: str) -> None:
+        """Patch one existing Feishu text message with refreshed content."""
+        if not self._client:
+            return
+        payload = json.dumps({"text": text}, ensure_ascii=False)
+        if PatchMessageRequest is not None and PatchMessageRequestBody is not None:
+            request = (
+                PatchMessageRequest.builder()
+                .message_id(message_id)
+                .request_body(
+                    PatchMessageRequestBody.builder()
+                    .content(payload)
+                    .build()
+                )
+                .build()
+            )
+            response = self._client.im.v1.message.patch(request)
+        elif UpdateMessageRequest is not None and UpdateMessageRequestBody is not None:
+            request = (
+                UpdateMessageRequest.builder()
+                .message_id(message_id)
+                .request_body(
+                    UpdateMessageRequestBody.builder()
+                    .msg_type("text")
+                    .content(payload)
+                    .build()
+                )
+                .build()
+            )
+            response = self._client.im.v1.message.update(request)
+        else:
+            raise RuntimeError("Feishu message patch/update API is unavailable in current SDK/runtime")
+
+        success_fn = getattr(response, "success", None)
+        if callable(success_fn) and not success_fn():
+            code = getattr(response, "code", "")
+            message = getattr(response, "msg", "")
+            log_id_fn = getattr(response, "get_log_id", None)
+            log_id = log_id_fn() if callable(log_id_fn) else ""
+            raise RuntimeError(f"Feishu patch message failed: code={code}, msg={message}, log_id={log_id}")
 
     def _send_message_request_sync(self, request, *, request_type: str) -> str:
         if not self._client:
@@ -540,6 +602,67 @@ class FeishuChannel(BaseChannel):
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._send_sync, msg)
 
+    async def send_delta(self, chat_id: str, delta: str, metadata: dict[str, Any] | None = None) -> None:
+        """Stream text into one Feishu message by patching the latest message."""
+        meta = metadata or {}
+        state = self._stream_states.get(chat_id)
+        now = time.monotonic()
+
+        if meta.get("_stream_end"):
+            if state is not None:
+                await self._flush_stream_state(chat_id, force=True)
+                self._stream_states.pop(chat_id, None)
+            return
+
+        if not delta:
+            return
+
+        if state is None:
+            message_id = await self._send_stream_initial(chat_id, delta)
+            self._stream_states[chat_id] = {
+                "buffer": delta,
+                "sent_text": delta,
+                "message_id": message_id,
+                "last_flush_at": now,
+            }
+            return
+
+        state["buffer"] = f"{state.get('buffer', '')}{delta}"
+        interval = self._stream_update_interval_seconds()
+        last_flush_at = float(state.get("last_flush_at", 0.0) or 0.0)
+        if interval <= 0 or now - last_flush_at >= interval:
+            await self._flush_stream_state(chat_id, force=True)
+
+    async def _send_stream_initial(self, chat_id: str, text: str) -> str:
+        """Send the first streaming frame as a normal text message."""
+        msg = type("_FeishuStreamMsg", (), {"chat_id": chat_id, "content": text, "metadata": {}})()
+        loop = asyncio.get_running_loop()
+        message_id = await loop.run_in_executor(None, self._send_text_sync, msg)
+        return str(message_id or "")
+
+    async def _flush_stream_state(self, chat_id: str, *, force: bool = False) -> None:
+        """Patch the active Feishu streaming message to the latest buffered text."""
+        state = self._stream_states.get(chat_id)
+        if state is None:
+            return
+        buffer = str(state.get("buffer", "") or "")
+        sent_text = str(state.get("sent_text", "") or "")
+        if not buffer or (not force and buffer == sent_text):
+            return
+        message_id = str(state.get("message_id", "") or "")
+        if not message_id:
+            return
+
+        loop = asyncio.get_running_loop()
+        try:
+            await loop.run_in_executor(None, self._patch_text_sync, message_id, buffer)
+        except Exception:
+            logger.exception("Failed updating Feishu streaming message; keeping previous text")
+            return
+
+        state["sent_text"] = buffer
+        state["last_flush_at"] = time.monotonic()
+
     def _add_reaction_sync(self, message_id: str, emoji_type: str) -> None:
         """Best-effort reaction API call executed in thread pool."""
         if (
@@ -766,6 +889,7 @@ class FeishuChannel(BaseChannel):
                 "msg_type": msg_type,
                 "chat_type": chat_type,
                 "message_id": message_id,
+                "_wants_stream": self._streaming_enabled,
             }
             content, media_paths = await self._handle_supported_message(
                 msg_type=msg_type,

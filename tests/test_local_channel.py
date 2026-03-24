@@ -104,6 +104,15 @@ class LocalChannelTests(unittest.IsolatedAsyncioTestCase):
         inbound = await bus.consume_inbound()
         self.assertTrue(inbound.metadata.get("_wants_stream"))
 
+    async def test_ingest_text_can_disable_streaming(self) -> None:
+        bus = MessageBus()
+        channel = LocalChannel(bus=bus, writer=lambda _line: None, streaming_enabled=False)
+
+        await channel.ingest_text("hello", chat_id="terminal", sender_id="u1")
+
+        inbound = await bus.consume_inbound()
+        self.assertFalse(inbound.metadata.get("_wants_stream"))
+
 
 if __name__ == "__main__":
     unittest.main()

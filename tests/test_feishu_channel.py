@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import types as pytypes
 import unittest
 from pathlib import Path
@@ -14,6 +15,13 @@ from openpipixia.channels.feishu import FeishuChannel
 
 
 class FeishuChannelTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self._env_backup = dict(os.environ)
+
+    def tearDown(self) -> None:
+        os.environ.clear()
+        os.environ.update(self._env_backup)
+
     async def test_on_message_adds_thumbsup_reaction_and_forwards_group_text(self) -> None:
         bus = MessageBus()
         channel = FeishuChannel(bus=bus, app_id="app-id", app_secret="app-secret")
@@ -42,6 +50,37 @@ class FeishuChannelTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(inbound.chat_id, "oc_group_1")
         self.assertEqual(inbound.content, "hello from feishu")
         self.assertEqual(inbound.metadata.get("message_id"), "om_123")
+        self.assertFalse(inbound.metadata.get("_wants_stream"))
+
+    async def test_on_message_can_request_streaming_when_enabled(self) -> None:
+        bus = MessageBus()
+        channel = FeishuChannel(
+            bus=bus,
+            app_id="app-id",
+            app_secret="app-secret",
+            streaming_enabled=True,
+        )
+        data = pytypes.SimpleNamespace(
+            event=pytypes.SimpleNamespace(
+                message=pytypes.SimpleNamespace(
+                    message_id="om_124",
+                    chat_id="oc_group_1",
+                    chat_type="group",
+                    message_type="text",
+                    content='{"text":"hello from feishu"}',
+                ),
+                sender=pytypes.SimpleNamespace(
+                    sender_type="user",
+                    sender_id=pytypes.SimpleNamespace(open_id="ou_user_1"),
+                ),
+            )
+        )
+
+        with patch.object(channel, "_add_reaction", new=AsyncMock()):
+            await channel._on_message(data)
+
+        inbound = await asyncio.wait_for(bus.consume_inbound(), timeout=0.2)
+        self.assertTrue(inbound.metadata.get("_wants_stream"))
 
     async def test_on_message_ignores_bot_messages(self) -> None:
         bus = MessageBus()
@@ -318,6 +357,42 @@ class FeishuChannelTests(unittest.IsolatedAsyncioTestCase):
             outbound.metadata.get("delivery"),
             {"status": "sent", "content_type": "text", "message_ids": ["om_text_plain"]},
         )
+
+    async def test_send_delta_creates_then_patches_same_message(self) -> None:
+        os.environ["OPENPIPIXIA_FEISHU_STREAM_UPDATE_INTERVAL_MS"] = "0"
+        bus = MessageBus()
+        channel = FeishuChannel(bus=bus, app_id="app-id", app_secret="app-secret")
+        channel._client = object()
+
+        with (
+            patch.object(channel, "_send_text_sync", return_value="om_stream_1") as send_text,
+            patch.object(channel, "_patch_text_sync") as patch_text,
+        ):
+            await channel.send_delta("oc_group_1", "hello")
+            await channel.send_delta("oc_group_1", " world")
+
+        send_text.assert_called_once()
+        initial_msg = send_text.call_args.args[0]
+        self.assertEqual(initial_msg.chat_id, "oc_group_1")
+        self.assertEqual(initial_msg.content, "hello")
+        patch_text.assert_called_once_with("om_stream_1", "hello world")
+
+    async def test_send_delta_flushes_and_clears_state_on_stream_end(self) -> None:
+        os.environ["OPENPIPIXIA_FEISHU_STREAM_UPDATE_INTERVAL_MS"] = "999999"
+        bus = MessageBus()
+        channel = FeishuChannel(bus=bus, app_id="app-id", app_secret="app-secret")
+        channel._client = object()
+
+        with (
+            patch.object(channel, "_send_text_sync", return_value="om_stream_2"),
+            patch.object(channel, "_patch_text_sync") as patch_text,
+        ):
+            await channel.send_delta("oc_group_1", "hello")
+            await channel.send_delta("oc_group_1", " world")
+            await channel.send_delta("oc_group_1", "", {"_stream_end": True})
+
+        patch_text.assert_called_once_with("om_stream_2", "hello world")
+        self.assertNotIn("oc_group_1", channel._stream_states)
 
 
 if __name__ == "__main__":

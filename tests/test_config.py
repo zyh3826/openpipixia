@@ -11,6 +11,7 @@ from pathlib import Path
 from openpipixia.core.config import (
     apply_config_to_env,
     bootstrap_env_from_config,
+    config_to_env,
     default_config,
     get_config_path,
     get_data_dir,
@@ -154,6 +155,34 @@ class ConfigTests(unittest.TestCase):
         apply_config_to_env(cfg, overwrite=True)
         self.assertEqual(os.environ["OPENPIPIXIA_MODEL"], "from-config")
         self.assertEqual(os.environ["GOOGLE_API_KEY"], "key-from-config")
+
+    def test_apply_config_to_env_preserves_explicit_shell_debug_flags(self) -> None:
+        cfg = default_config()
+        cfg["debug"] = False
+
+        os.environ["OPENPIPIXIA_DEBUG"] = "1"
+        os.environ["OPENPIPIXIA_DEBUG_LOG_PATH"] = "/tmp/openppx-debug.log"
+
+        apply_config_to_env(cfg, overwrite=True)
+
+        self.assertEqual(os.environ["OPENPIPIXIA_DEBUG"], "1")
+        self.assertEqual(os.environ["OPENPIPIXIA_DEBUG_LOG_PATH"], "/tmp/openppx-debug.log")
+
+    def test_default_channel_streaming_flags(self) -> None:
+        cfg = default_config()
+
+        self.assertTrue(cfg["channels"]["local"]["streamingEnabled"])
+        self.assertFalse(cfg["channels"]["feishu"]["streamingEnabled"])
+
+    def test_config_to_env_maps_channel_streaming_flags(self) -> None:
+        cfg = default_config()
+        cfg["channels"]["local"]["streamingEnabled"] = False
+        cfg["channels"]["feishu"]["streamingEnabled"] = True
+
+        env = config_to_env(cfg)
+
+        self.assertEqual(env["LOCAL_STREAMING_ENABLED"], "0")
+        self.assertEqual(env["FEISHU_STREAMING_ENABLED"], "1")
 
     def test_bootstrap_env_from_config(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

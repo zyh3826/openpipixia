@@ -93,6 +93,8 @@ _CHANNEL_ALLOWLIST_FIELDS: tuple[tuple[str, str, str], ...] = (
 
 # (channel_name, config_key, env_key, default)
 _CHANNEL_FLAG_FIELDS: tuple[tuple[str, str, str, bool], ...] = (
+    ("local", "streamingEnabled", "LOCAL_STREAMING_ENABLED", True),
+    ("feishu", "streamingEnabled", "FEISHU_STREAMING_ENABLED", False),
     ("discord", "includeBots", "DISCORD_INCLUDE_BOTS", False),
     ("dingtalk", "streamModeEnabled", "DINGTALK_STREAM_MODE_ENABLED", True),
     ("email", "consentGranted", "EMAIL_CONSENT_GRANTED", False),
@@ -122,6 +124,9 @@ _CONFIG_PATH_ENV = "OPENPIPIXIA_CONFIG_FILE"
 _RUNTIME_CONFIG_PATH_ENV = "OPENPIPIXIA_RUNTIME_CONFIG_FILE"
 _DATA_DIR_ENV = "OPENPIPIXIA_DATA_DIR"
 _MEMORY_MARKDOWN_DIR_ENV = "OPENPIPIXIA_MEMORY_MARKDOWN_DIR"
+_SHELL_DEBUG_ENV_KEYS: frozenset[str] = frozenset(
+    {"OPENPIPIXIA_DEBUG", "OPENPIPIXIA_DEBUG_LOG_PATH"}
+)
 
 
 def get_data_dir() -> Path:
@@ -289,6 +294,7 @@ def default_config() -> dict[str, Any]:
         "channels": {
             "local": {
                 "enabled": True,
+                "streamingEnabled": True,
             },
             "feishu": {
                 "enabled": False,
@@ -297,6 +303,7 @@ def default_config() -> dict[str, Any]:
                 "encryptKey": "",
                 "verificationToken": "",
                 "allowFrom": [],
+                "streamingEnabled": False,
             },
             "telegram": {
                 "enabled": False,
@@ -923,6 +930,11 @@ def apply_config_to_env(
     cfg = normalize_config(config)
     mapped = config_to_env(cfg, runtime_env_overrides=runtime_env_overrides)
     fallback_api_key_env = _active_provider_fallback_api_key_env(cfg)
+    shell_debug_overrides = {
+        key: os.environ[key]
+        for key in _SHELL_DEBUG_ENV_KEYS
+        if os.getenv(key, "").strip()
+    }
     if clear_missing:
         for key in _managed_env_keys():
             if key not in mapped:
@@ -938,6 +950,10 @@ def apply_config_to_env(
             continue
         if overwrite or key not in os.environ:
             os.environ[key] = value
+
+    # Keep explicit shell-provided debug flags for temporary diagnostics.
+    for key, value in shell_debug_overrides.items():
+        os.environ[key] = value
 
 
 def bootstrap_env_from_config(config_path: Path | None = None) -> dict[str, Any] | None:

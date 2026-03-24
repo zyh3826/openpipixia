@@ -42,7 +42,11 @@ class ChannelSpec:
 
 
 def _build_local(bus: MessageBus, local_writer: LocalWriter) -> BaseChannel:
-    return LocalChannel(bus=bus, writer=local_writer)
+    return LocalChannel(
+        bus=bus,
+        writer=local_writer,
+        streaming_enabled=_env_flag("LOCAL_STREAMING_ENABLED", default=True),
+    )
 
 
 def _validate_local() -> list[str]:
@@ -75,6 +79,7 @@ def _build_feishu(bus: MessageBus, _local_writer: LocalWriter) -> BaseChannel:
         encrypt_key=os.getenv("FEISHU_ENCRYPT_KEY", "").strip(),
         verification_token=os.getenv("FEISHU_VERIFICATION_TOKEN", "").strip(),
         allow_from=allow_from,
+        streaming_enabled=_env_flag("FEISHU_STREAMING_ENABLED", default=False),
     )
 
 
